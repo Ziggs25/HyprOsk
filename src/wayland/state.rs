@@ -157,14 +157,11 @@ impl WaylandState {
         self.init_surface(qh);
 
         if let Some(ref surface) = self.layer_surface {
-            surface.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-            surface.set_size(0, self.height);
             if self.config.general.exclusive_zone {
                 surface.set_exclusive_zone(self.height as i32);
             } else {
                 surface.set_exclusive_zone(0);
             }
-            surface.set_keyboard_interactivity(KeyboardInteractivity::None);
             surface.commit();
         }
 
@@ -180,7 +177,6 @@ impl WaylandState {
         tracing::info!("Hiding HyprOsk on-screen keyboard");
         self.is_visible = false;
         if let Some(ref surface) = self.layer_surface {
-            surface.set_size(0, 0);
             surface.set_exclusive_zone(0);
             surface.wl_surface().attach(None, 0, 0);
             surface.commit();
