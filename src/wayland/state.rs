@@ -1,0 +1,654 @@
+use std::os::fd::AsFd;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    output::{OutputHandler, OutputState},
+    registry::{ProvidesRegistryState, RegistryState},
+    seat::{
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        touch::TouchHandler,
+        Capability, SeatHandler, SeatState,
+    },
+    shell::wlr_layer::{
+        Anchor, KeyboardInteractivity, LayerShell, LayerSurface,
+    },
+    shell::WaylandSurface,
+    shm::{
+        slot::SlotPool,
+        Shm, ShmHandler,
+    },
+    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm, delegate_touch, registry_handlers,
+};
+use wayland_client::{
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch, wl_shm},
+    Connection, QueueHandle,
+};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+    zwp_input_method_v2::ZwpInputMethodV2,
+};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+};
+
+use crate::config::Config;
+use crate::layout::{key::KeyAction, KeyboardLayout, LayerId};
+use crate::render::engine::RenderEngine;
+use crate::render::theme::Theme;
+use crate::suggest::SuggestEngine;
+use crate::wayland::input_method::InputMethodState;
+use crate::wayland::layer_shell::create_layer_surface;
+use crate::wayland::virtual_keyboard::{create_keymap_fd, KEYMAP_FORMAT};
+
+// Linux evdev (input-event-codes.h) keycodes used by the virtual keyboard.
+const KEY_ESC: u32 = 1;
+const KEY_BACKSPACE: u32 = 14;
+const KEY_TAB: u32 = 15;
+const KEY_ENTER: u32 = 28;
+const KEY_UP: u32 = 103;
+const KEY_DOWN: u32 = 108;
+const KEY_LEFT: u32 = 105;
+const KEY_RIGHT: u32 = 106;
+
+pub struct WaylandState {
+    // SCTK base states
+    pub registry_state: RegistryState,
+    pub compositor_state: CompositorState,
+    pub output_state: OutputState,
+    pub shm_state: Shm,
+    pub seat_state: SeatState,
+    pub layer_shell: LayerShell,
+    pub pool: SlotPool,
+
+    // Wayland Protocol Globals
+    pub im_manager: Option<ZwpInputMethodManagerV2>,
+    pub input_method: Option<ZwpInputMethodV2>,
+    pub vk_manager: Option<ZwpVirtualKeyboardManagerV1>,
+    pub virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
+
+    // Surfaces & Lifecycle
+    pub layer_surface: Option<LayerSurface>,
+    pub is_visible: bool,
+    pub is_running: bool,
+    pub width: u32,
+    pub height: u32,
+
+    // Input, Suggestions & Gesture State
+    pub im_state: InputMethodState,
+    pub current_layer: LayerId,
+    pub layout: KeyboardLayout,
+    pub theme: Theme,
+    pub config: Config,
+    pub suggest_engine: SuggestEngine,
+    pub pressed_key: Option<(usize, usize)>,
+
+    // Spacebar Glide / Swipe Cursor Navigation
+    pub space_touch_start: Option<(f64, f64)>,
+    pub space_last_x: f64,
+    pub is_space_swiping: bool,
+    pub swipe_offset: Option<f32>,
+}
+
+impl WaylandState {
+    pub fn new(
+        registry_state: RegistryState,
+        compositor_state: CompositorState,
+        output_state: OutputState,
+        shm_state: Shm,
+        seat_state: SeatState,
+        layer_shell: LayerShell,
+        shm: &Shm,
+        config: Config,
+    ) -> Self {
+        let pool = SlotPool::new(1920 * 600 * 4, shm).expect("Failed to create SHM slot pool");
+        let theme = Theme::from(&config.theme);
+        let height = config.general.height;
+        let suggest_engine = SuggestEngine::new();
+        let layout = KeyboardLayout::get_layout(LayerId::Lower, &[]);
+
+        Self {
+            registry_state,
+            compositor_state,
+            output_state,
+            shm_state,
+            seat_state,
+            layer_shell,
+            pool,
+            im_manager: None,
+            input_method: None,
+            vk_manager: None,
+            virtual_keyboard: None,
+            layer_surface: None,
+            is_visible: false,
+            is_running: true,
+            width: 1000,
+            height,
+            im_state: InputMethodState::default(),
+            current_layer: LayerId::Lower,
+            layout,
+            theme,
+            config,
+            suggest_engine,
+            pressed_key: None,
+            space_touch_start: None,
+            space_last_x: 0.0,
+            is_space_swiping: false,
+            swipe_offset: None,
+        }
+    }
+
+    pub fn init_surface(&mut self, qh: &QueueHandle<Self>) {
+        if self.layer_surface.is_none() {
+            let surface = create_layer_surface(self, qh);
+            self.layer_surface = Some(surface);
+        }
+    }
+
+    pub fn show_keyboard(&mut self, qh: &QueueHandle<Self>) {
+        if self.is_visible {
+            return;
+        }
+        tracing::info!("Showing HyprOsk on-screen keyboard");
+        self.init_surface(qh);
+
+        if let Some(ref surface) = self.layer_surface {
+            surface.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+            surface.set_size(0, self.height);
+            if self.config.general.exclusive_zone {
+                surface.set_exclusive_zone(self.height as i32);
+            } else {
+                surface.set_exclusive_zone(0);
+            }
+            surface.set_keyboard_interactivity(KeyboardInteractivity::None);
+            surface.commit();
+            self.is_visible = true;
+            self.sync_layout_and_redraw(qh);
+        }
+    }
+
+    pub fn hide_keyboard(&mut self, _qh: &QueueHandle<Self>) {
+        if !self.is_visible {
+            return;
+        }
+        tracing::info!("Hiding HyprOsk on-screen keyboard");
+        if let Some(ref surface) = self.layer_surface {
+            surface.set_size(0, 0);
+            surface.set_exclusive_zone(0);
+            surface.wl_surface().attach(None, 0, 0);
+            surface.wl_surface().commit();
+            self.is_visible = false;
+        }
+        self.suggest_engine.clear();
+    }
+
+    pub fn toggle_keyboard(&mut self, qh: &QueueHandle<Self>) {
+        if self.is_visible {
+            self.hide_keyboard(qh);
+        } else {
+            self.show_keyboard(qh);
+        }
+    }
+
+    pub fn switch_layer(&mut self, layer: LayerId, qh: &QueueHandle<Self>) {
+        self.current_layer = layer;
+        self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn sync_layout_and_redraw(&mut self, qh: &QueueHandle<Self>) {
+        self.layout = KeyboardLayout::get_layout(self.current_layer, &self.suggest_engine.candidates);
+        self.redraw(qh);
+    }
+
+    pub fn adapt_layout_for_content_purpose(&mut self, purpose: u32, qh: &QueueHandle<Self>) {
+        if (2..=5).contains(&purpose) {
+            self.switch_layer(LayerId::Numbers, qh);
+        }
+    }
+
+    pub fn redraw(&mut self, _qh: &QueueHandle<Self>) {
+        if !self.is_visible {
+            return;
+        }
+
+        let width = self.width.max(100);
+        let height = self.height.max(100);
+        let stride = width * 4;
+
+        let (buffer, canvas) = match self.pool.create_buffer(
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Argb8888,
+        ) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("Failed to create SHM buffer: {:?}", e);
+                return;
+            }
+        };
+
+        RenderEngine::render(
+            canvas,
+            width,
+            height,
+            &self.layout,
+            &self.theme,
+            self.pressed_key,
+            self.swipe_offset,
+        );
+
+        if let Some(ref surface) = self.layer_surface {
+            buffer.attach_to(surface.wl_surface()).expect("Failed to attach buffer");
+            surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+            surface.wl_surface().commit();
+        }
+    }
+
+    pub fn handle_key_press(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
+        let action = {
+            let row = match self.layout.rows.get(r_idx) {
+                Some(r) => r,
+                None => return,
+            };
+            let key = match row.keys.get(k_idx) {
+                Some(k) => k,
+                None => return,
+            };
+            key.action.clone()
+        };
+
+        tracing::debug!("Key pressed: {:?}", action);
+        self.pressed_key = Some((r_idx, k_idx));
+
+        match action {
+            KeyAction::Text(text) => {
+                for ch in text.chars() {
+                    self.suggest_engine.push_char(ch);
+                }
+                self.send_text(&text);
+                if self.current_layer == LayerId::Upper {
+                    self.current_layer = LayerId::Lower;
+                }
+            }
+            KeyAction::Suggestion(idx) => {
+                if let Some(chosen_word) = self.suggest_engine.candidates.get(idx).cloned() {
+                    let preedit_len = self.suggest_engine.current_word.chars().count() as u32;
+                    if preedit_len > 0 {
+                        self.delete_surrounding(preedit_len, 0);
+                    }
+                    self.send_text(&format!("{} ", chosen_word));
+                    self.suggest_engine.clear();
+                }
+            }
+            KeyAction::Backspace => {
+                self.suggest_engine.pop_char();
+                self.send_backspace();
+            }
+            KeyAction::Enter => {
+                self.suggest_engine.clear();
+                self.send_enter();
+            }
+            KeyAction::Space => {
+                // Handled on release if not swiped
+            }
+            KeyAction::Tab => {
+                self.suggest_engine.clear();
+                self.send_tab();
+            }
+            KeyAction::Escape => {
+                self.send_escape();
+            }
+            KeyAction::Shift => {
+                let next = if self.current_layer == LayerId::Lower {
+                    LayerId::Upper
+                } else {
+                    LayerId::Lower
+                };
+                self.current_layer = next;
+            }
+            KeyAction::SwitchLayer(layer) => {
+                self.current_layer = layer;
+            }
+            KeyAction::Hide => {
+                self.hide_keyboard(qh);
+            }
+            KeyAction::ArrowLeft => {
+                self.send_arrow_left();
+            }
+            KeyAction::ArrowRight => {
+                self.send_arrow_right();
+            }
+            KeyAction::ArrowUp => {
+                self.send_arrow_up();
+            }
+            KeyAction::ArrowDown => {
+                self.send_arrow_down();
+            }
+            KeyAction::Copy => {
+                tracing::info!("Copy requested");
+            }
+            KeyAction::Paste => {
+                tracing::info!("Paste requested");
+            }
+            _ => {}
+        }
+
+        self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn handle_key_release(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
+        if let Some(row) = self.layout.rows.get(r_idx) {
+            if let Some(key) = row.keys.get(k_idx) {
+                if matches!(key.action, KeyAction::Space) {
+                    if !self.is_space_swiping {
+                        self.suggest_engine.clear();
+                        self.send_text(" ");
+                    }
+                }
+            }
+        }
+
+        self.pressed_key = None;
+        self.space_touch_start = None;
+        self.is_space_swiping = false;
+        self.swipe_offset = None;
+        self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn handle_motion(&mut self, x: f64, _y: f64, qh: &QueueHandle<Self>) {
+        if let Some((start_x, _)) = self.space_touch_start {
+            let delta = x - self.space_last_x;
+            let step_threshold = 18.0;
+
+            if delta.abs() >= step_threshold {
+                self.is_space_swiping = true;
+                if delta < 0.0 {
+                    self.send_arrow_left();
+                } else {
+                    self.send_arrow_right();
+                }
+                self.space_last_x = x;
+            }
+
+            self.swipe_offset = Some((x - start_x) as f32);
+            self.redraw(qh);
+        }
+    }
+
+    pub fn send_text(&mut self, text: &str) {
+        if let Some(ref im) = self.input_method {
+            im.commit_string(text.to_string());
+            im.commit(self.im_state.serial);
+            self.im_state.serial = self.im_state.serial.wrapping_add(1);
+        }
+    }
+
+    pub fn delete_surrounding(&mut self, before: u32, after: u32) {
+        if let Some(ref im) = self.input_method {
+            im.delete_surrounding_text(before, after);
+            im.commit(self.im_state.serial);
+            self.im_state.serial = self.im_state.serial.wrapping_add(1);
+        }
+    }
+
+    pub fn send_backspace(&mut self) {
+        if self.input_method.is_some() {
+            self.delete_surrounding(1, 0);
+        } else {
+            self.send_keycode(KEY_BACKSPACE);
+        }
+    }
+
+    pub fn send_enter(&mut self) {
+        if self.input_method.is_some() {
+            self.send_text("\n");
+        } else {
+            self.send_keycode(KEY_ENTER);
+        }
+    }
+
+    pub fn send_tab(&mut self) {
+        if self.input_method.is_some() {
+            self.send_text("\t");
+        } else {
+            self.send_keycode(KEY_TAB);
+        }
+    }
+
+    pub fn send_arrow_left(&mut self) {
+        self.send_keycode(KEY_LEFT);
+    }
+
+    pub fn send_arrow_right(&mut self) {
+        self.send_keycode(KEY_RIGHT);
+    }
+
+    pub fn send_arrow_up(&mut self) {
+        self.send_keycode(KEY_UP);
+    }
+
+    pub fn send_arrow_down(&mut self) {
+        self.send_keycode(KEY_DOWN);
+    }
+
+    pub fn send_escape(&mut self) {
+        self.send_keycode(KEY_ESC);
+    }
+
+    /// Sends a keycode press+release through the virtual keyboard, since
+    /// `zwp_input_method_v2` has no request to emit keycodes.
+    pub fn send_keycode(&mut self, keycode: u32) {
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u32);
+
+        if let Some(ref vk) = self.virtual_keyboard {
+            vk.key(time, keycode, wl_keyboard::KeyState::Pressed.into());
+            vk.key(time, keycode, wl_keyboard::KeyState::Released.into());
+        } else {
+            tracing::warn!("No virtual keyboard bound; dropping keycode {keycode}");
+        }
+    }
+
+    pub fn send_keysym(&mut self, keysym: u32) {
+        let keycode = match keysym {
+            0xff08 => KEY_BACKSPACE,
+            0xff09 => KEY_TAB,
+            0xff0d => KEY_ENTER,
+            0xff1b => KEY_ESC,
+            0xff51 => KEY_LEFT,
+            0xff52 => KEY_UP,
+            0xff53 => KEY_RIGHT,
+            0xff54 => KEY_DOWN,
+            _ => return,
+        };
+        self.send_keycode(keycode);
+    }
+
+    /// Binds `zwp_virtual_keyboard_v1` on the first available seat and uploads
+    /// the xkb keymap so keycodes can be translated by the compositor.
+    pub fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) {
+        if self.virtual_keyboard.is_some() {
+            return;
+        }
+
+        let (manager, seat) = match (&self.vk_manager, self.seat_state.seats().next()) {
+            (Some(manager), Some(seat)) => (manager, seat),
+            _ => return,
+        };
+
+        let vk = manager.create_virtual_keyboard(&seat, qh, ());
+        match create_keymap_fd() {
+            Some((fd, size)) => {
+                vk.keymap(KEYMAP_FORMAT, fd.as_fd(), size);
+                vk.modifiers(0, 0, 0, 0);
+                tracing::info!("Virtual keyboard bound and keymap uploaded");
+            }
+            None => {
+                tracing::warn!("Failed to build keymap; keycodes may be unmapped");
+            }
+        }
+        self.virtual_keyboard = Some(vk);
+    }
+}
+
+// SCTK Delegate Implementations
+delegate_compositor!(WaylandState);
+delegate_output!(WaylandState);
+delegate_shm!(WaylandState);
+delegate_layer!(WaylandState);
+delegate_seat!(WaylandState);
+delegate_pointer!(WaylandState);
+delegate_touch!(WaylandState);
+delegate_registry!(WaylandState);
+
+impl ProvidesRegistryState for WaylandState {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+impl CompositorHandler for WaylandState {
+    fn scale_factor_changed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _scale: i32) {}
+    fn transform_changed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _transform: wl_output::Transform) {}
+    fn frame(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _time: u32) {}
+    fn surface_enter(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _output: &wl_output::WlOutput) {}
+    fn surface_leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _output: &wl_output::WlOutput) {}
+}
+
+impl OutputHandler for WaylandState {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+    fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput) {}
+    fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput) {}
+}
+
+impl ShmHandler for WaylandState {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
+    }
+}
+
+impl SeatHandler for WaylandState {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {
+        self.init_virtual_keyboard(qh);
+    }
+    fn new_capability(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, capability: Capability) {
+        if capability == Capability::Pointer {
+            let _ = self.seat_state.get_pointer(qh, &seat);
+        }
+        if capability == Capability::Touch {
+            let _ = self.seat_state.get_touch(qh, &seat);
+        }
+    }
+    fn remove_capability(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat, _capability: Capability) {}
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for WaylandState {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            match event.kind {
+                PointerEventKind::Motion { .. } => {
+                    let (x, y) = event.position;
+                    self.handle_motion(x, y, qh);
+                }
+                PointerEventKind::Press { .. } => {
+                    let (x, y) = event.position;
+                    let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+                    if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
+                        if matches!(key.action, KeyAction::Space) {
+                            self.space_touch_start = Some((x, y));
+                            self.space_last_x = x;
+                            self.is_space_swiping = false;
+                        }
+                        self.handle_key_press(r_idx, k_idx, qh);
+                    }
+                }
+                PointerEventKind::Release { .. } => {
+                    if let Some((r_idx, k_idx)) = self.pressed_key {
+                        self.handle_key_release(r_idx, k_idx, qh);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl TouchHandler for WaylandState {
+    fn down(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        _surface: wl_surface::WlSurface,
+        _id: i32,
+        position: (f64, f64),
+    ) {
+        let (x, y) = position;
+        let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+        if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
+            if matches!(key.action, KeyAction::Space) {
+                self.space_touch_start = Some((x, y));
+                self.space_last_x = x;
+                self.is_space_swiping = false;
+            }
+            self.handle_key_press(r_idx, k_idx, qh);
+        }
+    }
+
+    fn up(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        _id: i32,
+    ) {
+        if let Some((r_idx, k_idx)) = self.pressed_key {
+            self.handle_key_release(r_idx, k_idx, qh);
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _time: u32,
+        _id: i32,
+        position: (f64, f64),
+    ) {
+        let (x, y) = position;
+        self.handle_motion(x, y, qh);
+    }
+
+    fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
+        self.pressed_key = None;
+        self.space_touch_start = None;
+        self.is_space_swiping = false;
+        self.swipe_offset = None;
+    }
+
+    fn shape(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _major: f64, _minor: f64) {}
+    fn orientation(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _orientation: f64) {}
+}

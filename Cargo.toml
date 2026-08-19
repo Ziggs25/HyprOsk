@@ -1,0 +1,35 @@
+[package]
+name = "hyprosk"
+version = "0.1.0"
+edition = "2024"
+authors = ["CheeseGuru & Antigravity"]
+description = "Fast, lightweight, native Wayland On-Screen Keyboard designed for Hyprland with automatic input-field detection"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop"] }
+xkbcommon = { version = "0.8", features = ["wayland"] }
+calloop = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "2.0"
+nix = { version = "0.29", features = ["signal", "socket", "user", "mman", "fs"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+debug = true
