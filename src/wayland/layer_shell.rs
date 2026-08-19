@@ -23,9 +23,10 @@ impl LayerShellHandler for WaylandState {
         let effective_w = if w > 0 { w } else { self.width };
         let effective_h = if h > 0 { h } else { self.height };
 
-        tracing::debug!("LayerSurface configure event: {}x{}", effective_w, effective_h);
+        tracing::info!("LayerSurface configured: {}x{}", effective_w, effective_h);
         self.width = effective_w;
         self.height = effective_h;
+        self.is_configured = true;
 
         if self.is_visible {
             self.redraw(qh);

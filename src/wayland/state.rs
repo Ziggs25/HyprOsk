@@ -1,6 +1,3 @@
-use std::os::fd::AsFd;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     output::{OutputHandler, OutputState},
@@ -21,6 +18,8 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
     delegate_seat, delegate_shm, delegate_touch, registry_handlers,
 };
+use std::os::fd::AsFd;
+use std::time::{SystemTime, UNIX_EPOCH};
 use wayland_client::{
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch, wl_shm},
     Connection, QueueHandle,
@@ -43,15 +42,15 @@ use crate::wayland::input_method::InputMethodState;
 use crate::wayland::layer_shell::create_layer_surface;
 use crate::wayland::virtual_keyboard::{create_keymap_fd, KEYMAP_FORMAT};
 
-// Linux evdev (input-event-codes.h) keycodes used by the virtual keyboard.
+// Common Linux evdev keycodes
 const KEY_ESC: u32 = 1;
 const KEY_BACKSPACE: u32 = 14;
 const KEY_TAB: u32 = 15;
 const KEY_ENTER: u32 = 28;
-const KEY_UP: u32 = 103;
-const KEY_DOWN: u32 = 108;
 const KEY_LEFT: u32 = 105;
 const KEY_RIGHT: u32 = 106;
+const KEY_UP: u32 = 103;
+const KEY_DOWN: u32 = 108;
 
 pub struct WaylandState {
     // SCTK base states
@@ -71,6 +70,7 @@ pub struct WaylandState {
 
     // Surfaces & Lifecycle
     pub layer_surface: Option<LayerSurface>,
+    pub is_configured: bool,
     pub is_visible: bool,
     pub is_running: bool,
     pub width: u32,
@@ -122,6 +122,7 @@ impl WaylandState {
             vk_manager: None,
             virtual_keyboard: None,
             layer_surface: None,
+            is_configured: false,
             is_visible: false,
             is_running: true,
             width: 1000,
@@ -152,6 +153,7 @@ impl WaylandState {
             return;
         }
         tracing::info!("Showing HyprOsk on-screen keyboard");
+        self.is_visible = true;
         self.init_surface(qh);
 
         if let Some(ref surface) = self.layer_surface {
@@ -164,7 +166,9 @@ impl WaylandState {
             }
             surface.set_keyboard_interactivity(KeyboardInteractivity::None);
             surface.commit();
-            self.is_visible = true;
+        }
+
+        if self.is_configured {
             self.sync_layout_and_redraw(qh);
         }
     }
@@ -174,12 +178,12 @@ impl WaylandState {
             return;
         }
         tracing::info!("Hiding HyprOsk on-screen keyboard");
+        self.is_visible = false;
         if let Some(ref surface) = self.layer_surface {
             surface.set_size(0, 0);
             surface.set_exclusive_zone(0);
             surface.wl_surface().attach(None, 0, 0);
-            surface.wl_surface().commit();
-            self.is_visible = false;
+            surface.commit();
         }
         self.suggest_engine.clear();
     }
@@ -209,7 +213,7 @@ impl WaylandState {
     }
 
     pub fn redraw(&mut self, _qh: &QueueHandle<Self>) {
-        if !self.is_visible {
+        if !self.is_visible || !self.is_configured {
             return;
         }
 
@@ -243,7 +247,7 @@ impl WaylandState {
         if let Some(ref surface) = self.layer_surface {
             buffer.attach_to(surface.wl_surface()).expect("Failed to attach buffer");
             surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
-            surface.wl_surface().commit();
+            surface.commit();
         }
     }
 
@@ -342,11 +346,9 @@ impl WaylandState {
     pub fn handle_key_release(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
         if let Some(row) = self.layout.rows.get(r_idx) {
             if let Some(key) = row.keys.get(k_idx) {
-                if matches!(key.action, KeyAction::Space) {
-                    if !self.is_space_swiping {
-                        self.suggest_engine.clear();
-                        self.send_text(" ");
-                    }
+                if matches!(key.action, KeyAction::Space) && !self.is_space_swiping {
+                    self.suggest_engine.clear();
+                    self.send_text(" ");
                 }
             }
         }
@@ -438,8 +440,6 @@ impl WaylandState {
         self.send_keycode(KEY_ESC);
     }
 
-    /// Sends a keycode press+release through the virtual keyboard, since
-    /// `zwp_input_method_v2` has no request to emit keycodes.
     pub fn send_keycode(&mut self, keycode: u32) {
         let time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -468,8 +468,6 @@ impl WaylandState {
         self.send_keycode(keycode);
     }
 
-    /// Binds `zwp_virtual_keyboard_v1` on the first available seat and uploads
-    /// the xkb keymap so keycodes can be translated by the compositor.
     pub fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) {
         if self.virtual_keyboard.is_some() {
             return;
@@ -481,15 +479,12 @@ impl WaylandState {
         };
 
         let vk = manager.create_virtual_keyboard(&seat, qh, ());
-        match create_keymap_fd() {
-            Some((fd, size)) => {
-                vk.keymap(KEYMAP_FORMAT, fd.as_fd(), size);
-                vk.modifiers(0, 0, 0, 0);
-                tracing::info!("Virtual keyboard bound and keymap uploaded");
-            }
-            None => {
-                tracing::warn!("Failed to build keymap; keycodes may be unmapped");
-            }
+        if let Some((fd, size)) = create_keymap_fd() {
+            vk.keymap(KEYMAP_FORMAT, fd.as_fd(), size);
+            vk.modifiers(0, 0, 0, 0);
+            tracing::info!("Virtual keyboard bound and keymap uploaded");
+        } else {
+            tracing::warn!("Failed to build keymap; keycodes may be unmapped");
         }
         self.virtual_keyboard = Some(vk);
     }
