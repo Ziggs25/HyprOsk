@@ -83,6 +83,9 @@ pub struct BehaviorConfig {
     pub auto_hide: bool,
     /// Automatically hide keyboard on fullscreen windows
     pub hide_on_fullscreen: bool,
+    /// Only auto-show when no physical (folio) keyboard is attached; manual
+    /// `hyprosk show` / `toggle` always still works
+    pub folio_mode: bool,
     /// Haptic/audio feedback command on keypress (e.g. "paplay /path/to/click.ogg" or "feedbackd")
     pub feedback_command: Option<String>,
     /// Long press timeout in milliseconds for alternate characters
@@ -99,6 +102,7 @@ impl Default for BehaviorConfig {
             auto_show: true,
             auto_hide: true,
             hide_on_fullscreen: true,
+            folio_mode: false,
             feedback_command: None,
             long_press_ms: 400,
             repeat_delay_ms: 350,

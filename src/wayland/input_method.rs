@@ -42,7 +42,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
             zwp_input_method_v2::Event::Activate => {
                 tracing::info!("Received text-input Activate event -> Auto-showing HyprOsk");
                 state.im_state.is_active.store(true, Ordering::SeqCst);
-                if state.config.behavior.auto_show {
+                if state.config.behavior.auto_show && state.allow_auto_show() {
                     state.show_keyboard(qh);
                     // If triggered by auto-show, allow auto-hide on blur
                     state.manually_shown = false;

@@ -91,6 +91,9 @@ pub struct WaylandState {
     pub is_running: bool,
     pub width: u32,
     pub height: u32,
+    /// True while a physical (folio) keyboard is attached. Gates auto-show in
+    /// folio mode; manual show/toggle is unaffected.
+    pub folio_attached: bool,
 
     // Reusable SHM buffers (ring of IN_FLIGHT_BUFFERS slots). Buffers are
     // reused across frames once the compositor releases them; the pool never
@@ -155,6 +158,7 @@ impl WaylandState {
             is_running: true,
             width: 1000,
             height,
+            folio_attached: crate::folio::physical_keyboard_attached(),
             canvas_buffers: Vec::new(),
             canvas_size: (0, 0),
             im_state: InputMethodState::default(),
@@ -223,6 +227,33 @@ impl WaylandState {
             self.hide_keyboard(qh);
         } else {
             self.show_keyboard(qh);
+        }
+    }
+
+    /// Whether automatic activation (text-field focus) may show the keyboard.
+    ///
+    /// In folio mode this is denied while a physical keyboard is attached;
+    /// manual shows via `hyprosk show` / `toggle` are not affected.
+    pub fn allow_auto_show(&self) -> bool {
+        if self.config.behavior.folio_mode && self.folio_attached {
+            tracing::debug!("Folio keyboard attached, suppressing auto-show");
+            false
+        } else {
+            true
+        }
+    }
+
+    /// React to a folio attach/detach poll result.
+    ///
+    /// Detaching has no immediate effect (auto-show resumes on next focus);
+    /// attaching hides a keyboard that was only up because no keyboard was
+    /// present, leaving manually-shown keyboards alone so debug sessions and
+    /// the Folio test runs survive.
+    pub fn on_folio_change(&mut self, attached: bool, qh: &QueueHandle<Self>) {
+        self.folio_attached = attached;
+        tracing::info!("Folio keyboard {} -> auto-show {}", if attached { "attached" } else { "detached" }, if self.allow_auto_show() { "enabled" } else { "suppressed" });
+        if self.config.behavior.folio_mode && attached && self.is_visible && !self.manually_shown {
+            self.hide_keyboard(qh);
         }
     }
 

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod folio;
 pub mod hyprland;
 pub mod ipc;
 pub mod layout;
@@ -88,9 +89,18 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
     // Set up IPC channels
     let (ipc_tx, ipc_rx) = mpsc::channel();
     let (hypr_tx, hypr_rx) = mpsc::channel();
+    let (folio_tx, folio_rx) = mpsc::channel();
 
     IpcServer::start_server(ipc_tx);
     HyprlandIpcListener::start_listener(hypr_tx);
+
+    if config.behavior.folio_mode {
+        crate::folio::spawn_folio_poller(folio_tx);
+        tracing::info!(
+            "Folio mode enabled: auto-show suppressed while a physical keyboard is attached (current: {})",
+            state.folio_attached
+        );
+    }
 
     tracing::info!("HyprOsk daemon successfully initialized and running.");
 
@@ -129,6 +139,11 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                 }
                 HyprlandEvent::WorkspaceChanged(_) => {}
             }
+        }
+
+        // Check folio attach/detach changes
+        while let Ok(attached) = folio_rx.try_recv() {
+            state.on_folio_change(attached, &qh);
         }
 
         // Flush and wait for next event
