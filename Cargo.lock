@@ -1621,6 +1621,7 @@ dependencies = [
  "calloop 0.13.0",
  "clap",
  "i-slint-core",
+ "libc",
  "nix 0.29.0",
  "png 0.17.16",
  "serde",

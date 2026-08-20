@@ -22,6 +22,7 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "2.0"
 nix = { version = "0.29", features = ["signal", "socket", "user", "mman", "fs"] }
+libc = "0.2"
 # Slint = paint bucket only: headless software renderer, no windowing.
 slint = { version = "=1.14.0", default-features = false, features = ["std", "renderer-software", "compat-1-2"] }
 i-slint-core = { version = "=1.14.0", features = ["std", "svg"] }

@@ -33,6 +33,8 @@ enum Commands {
     Layer {
         name: String,
     },
+    /// Print folio/keyboard detection diagnostics for debugging
+    Status,
     /// Stop the running HyprOsk daemon
     Quit,
 }
@@ -68,6 +70,19 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Layer { name }) => {
             let resp = hyprosk::ipc::IpcServer::send_command(&format!("layer {}", name))?;
             println!("{}", resp.trim());
+        }
+        Some(Commands::Status) => {
+            let attached = hyprosk::folio::physical_keyboard_attached();
+            let tablet = hyprosk::folio::tablet_mode_active();
+            let evdev = hyprosk::folio::evdev_keyboard_present();
+            let proc_kbd = hyprosk::folio::proc_keyboard_present();
+            println!("tablet_mode (SW_TABLET_MODE): {tablet}");
+            println!("evdev letter-key keyboard:   {evdev}");
+            println!("/proc kbd-letter keyboard:   {proc_kbd}");
+            println!("folio attached (verdict):    {attached}");
+            let config = hyprosk::config::Config::load_or_create(cli.config.as_deref());
+            println!("folio_mode (config):         {}", config.behavior.folio_mode);
+            println!("auto-show will be:           {}", if !config.behavior.folio_mode || !attached { "ENABLED" } else { "SUPPRESSED" });
         }
         Some(Commands::Quit) => {
             let resp = hyprosk::ipc::IpcServer::send_command("quit")?;
