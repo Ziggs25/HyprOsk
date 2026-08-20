@@ -12,7 +12,7 @@ use smithay_client_toolkit::{
     },
     shell::WaylandSurface,
     shm::{
-        slot::SlotPool,
+        slot::{Buffer, SlotPool},
         Shm, ShmHandler,
     },
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
@@ -61,6 +61,12 @@ const KEY_DOWN: u32 = 108;
 const KEY_HOME: u32 = 102;
 const KEY_END: u32 = 107;
 
+/// Number of SHM buffers to cycle through. The compositor holds a buffer until
+/// it releases it; a small ring decouples rendering from the release round-trip
+/// while capping pool growth (sctk grows the pool only when the freelist is
+/// exhausted).
+const IN_FLIGHT_BUFFERS: usize = 3;
+
 pub struct WaylandState {
     // SCTK base states
     pub registry_state: RegistryState,
@@ -85,6 +91,12 @@ pub struct WaylandState {
     pub is_running: bool,
     pub width: u32,
     pub height: u32,
+
+    // Reusable SHM buffers (ring of IN_FLIGHT_BUFFERS slots). Buffers are
+    // reused across frames once the compositor releases them; the pool never
+    // grows, unlike allocating a fresh buffer per redraw.
+    pub canvas_buffers: Vec<Buffer>,
+    pub canvas_size: (u32, u32),
 
     // Input, Suggestions & Gesture State
     pub im_state: InputMethodState,
@@ -115,7 +127,10 @@ impl WaylandState {
         shm: &Shm,
         config: Config,
     ) -> Self {
-        let pool = SlotPool::new(1920 * 600 * 4, shm).expect("Failed to create SHM slot pool");
+        let pool = SlotPool::new(
+            (1000 * config.general.height.max(1) * 4) as usize,
+            shm,
+        ).expect("Failed to create SHM slot pool");
         let theme = Theme::from(&config.theme);
         let height = config.general.height;
         let suggest_engine = SuggestEngine::new();
@@ -140,6 +155,8 @@ impl WaylandState {
             is_running: true,
             width: 1000,
             height,
+            canvas_buffers: Vec::new(),
+            canvas_size: (0, 0),
             im_state: InputMethodState::default(),
             current_layer: LayerId::Lower,
             layout,
@@ -234,66 +251,94 @@ impl WaylandState {
         let height = self.height.max(100);
         let stride = width * 4;
 
-        let (buffer, canvas) = match self.pool.create_buffer(
-            width as i32,
-            height as i32,
-            stride as i32,
-            wl_shm::Format::Argb8888,
-        ) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::error!("Failed to create SHM buffer: {:?}", e);
+        // Rebuild the ring of reusable buffers when empty or when the surface
+        // was resized. The pool is sized exactly for IN_FLIGHT_BUFFERS frames;
+        // because the same buffers are reattached every frame (instead of
+        // calling create_buffer), the pool freelist is never exhausted and the
+        // underlying memfd stops growing.
+        if self.canvas_buffers.is_empty() || self.canvas_size != (width, height) {
+            let needed = (height as usize) * (stride as usize) * IN_FLIGHT_BUFFERS;
+            if self.pool.len() < needed && let Err(e) = self.pool.resize(needed) {
+                tracing::error!("Failed to grow SHM pool: {:?}", e);
                 return;
             }
-        };
-
-        RenderEngine::render(
-            canvas,
-            width,
-            height,
-            &self.layout,
-            &self.theme,
-            self.pressed_key,
-            self.swipe_offset,
-        );
-        // Paint swap: render the Wireframe scene through Slint when available.
-        if self.slint_scene.is_none() {
-            match SlintScene::new(width, height) {
-                Ok(scene) => self.slint_scene = Some(scene),
-                Err(e) => {
-                    tracing::warn!("Slint renderer unavailable, using legacy renderer: {e:?}");
+            self.canvas_buffers.clear();
+            for _ in 0..IN_FLIGHT_BUFFERS {
+                match self.pool.create_buffer(
+                    width as i32,
+                    height as i32,
+                    stride as i32,
+                    wl_shm::Format::Argb8888,
+                ) {
+                    Ok((buffer, _)) => self.canvas_buffers.push(buffer),
+                    Err(e) => {
+                        tracing::error!("Failed to create SHM buffer: {:?}", e);
+                        self.canvas_buffers.clear();
+                        return;
+                    }
                 }
             }
-        }
-        if let Some(scene) = self.slint_scene.as_mut() {
-            if scene.render(
-                &self.layout,
-                &self.theme,
-                width,
-                height,
-                self.pressed_key,
-                self.swipe_offset,
-                canvas,
-            ) {
-                tracing::trace!("Painted frame via Slint scene ({}x{})", width, height);
-            } else {
-                tracing::warn!("Slint frame render failed, falling back to legacy renderer");
-                RenderEngine::render(
-                    canvas,
-                    width,
-                    height,
-                    &self.layout,
-                    &self.theme,
-                    self.pressed_key,
-                    self.swipe_offset,
-                );
-            }
+            self.canvas_size = (width, height);
         }
 
-        if let Some(ref surface) = self.layer_surface {
-            buffer.attach_to(surface.wl_surface()).expect("Failed to attach buffer");
-            surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
-            surface.commit();
+        // Draw into the first buffer whose slot is free (i.e. released by the
+        // compositor). If all are still in flight, skip this frame — the
+        // previously committed buffer remains displayed.
+        for buffer in &self.canvas_buffers {
+            let Some(canvas) = buffer.canvas(&mut self.pool) else {
+                continue;
+            };
+
+            RenderEngine::render(
+                canvas,
+                width,
+                height,
+                &self.layout,
+                &self.theme,
+                self.pressed_key,
+                self.swipe_offset,
+            );
+            // Paint swap: render the Wireframe scene through Slint when available.
+            if self.slint_scene.is_none() {
+                match SlintScene::new(width, height) {
+                    Ok(scene) => self.slint_scene = Some(scene),
+                    Err(e) => {
+                        tracing::warn!("Slint renderer unavailable, using legacy renderer: {e:?}");
+                    }
+                }
+            }
+            if let Some(scene) = self.slint_scene.as_mut() {
+                if scene.render(
+                    &self.layout,
+                    &self.theme,
+                    width,
+                    height,
+                    self.pressed_key,
+                    self.swipe_offset,
+                    canvas,
+                ) {
+                    tracing::trace!("Painted frame via Slint scene ({}x{})", width, height);
+                } else {
+                    tracing::warn!("Slint frame render failed, falling back to legacy renderer");
+                    RenderEngine::render(
+                        canvas,
+                        width,
+                        height,
+                        &self.layout,
+                        &self.theme,
+                        self.pressed_key,
+                        self.swipe_offset,
+                    );
+                }
+            }
+
+            if let Some(ref surface) = self.layer_surface
+                && buffer.attach_to(surface.wl_surface()).is_ok()
+            {
+                surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+                surface.commit();
+            }
+            break;
         }
     }
 
