@@ -107,11 +107,8 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                 IpcCommand::Quit => state.is_running = false,
                 IpcCommand::SwitchLayer(layer_name) => {
                     let layer = match layer_name.to_lowercase().as_str() {
-                        "upper" | "shift" => LayerId::Upper,
-                        "numbers" | "123" | "num" => LayerId::Numbers,
-                        "symbols" | "sym" => LayerId::Symbols,
-                        "nav" => LayerId::Nav,
-                        "emoji" => LayerId::Emoji,
+                        "upper" | "shift" | "caps" => LayerId::Upper,
+                        "symbols" | "sym" | "123" | "num" | "numbers" => LayerId::Symbols,
                         _ => LayerId::Lower,
                     };
                     state.switch_layer(layer, &qh);

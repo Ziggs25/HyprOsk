@@ -30,10 +30,10 @@ pub struct GeneralConfig {
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
-            height: 320,
-            margin_bottom: 12,
-            margin_horizontal: 16,
-            corner_radius: 18.0,
+            height: 420,
+            margin_bottom: 0,
+            margin_horizontal: 0,
+            corner_radius: 0.0,
             exclusive_zone: true,
             theme_name: "catppuccin".to_string(),
         }
@@ -79,6 +79,8 @@ impl Default for ThemeConfig {
 pub struct BehaviorConfig {
     /// Automatically show keyboard when text input field is focused (zwp_input_method_v2)
     pub auto_show: bool,
+    /// Automatically hide keyboard when text input field loses focus
+    pub auto_hide: bool,
     /// Automatically hide keyboard on fullscreen windows
     pub hide_on_fullscreen: bool,
     /// Haptic/audio feedback command on keypress (e.g. "paplay /path/to/click.ogg" or "feedbackd")
@@ -95,6 +97,7 @@ impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
             auto_show: true,
+            auto_hide: true,
             hide_on_fullscreen: true,
             feedback_command: None,
             long_press_ms: 400,

@@ -1,11 +1,11 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LayerId {
+    /// QWERTY letters (lowercase)
     Lower,
+    /// QWERTY letters (uppercase, via Shift)
     Upper,
-    Numbers,
+    /// Symbols & numbers (wireframe Layout B)
     Symbols,
-    Nav,
-    Emoji,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +29,18 @@ pub enum KeyAction {
     ArrowRight,
     ArrowUp,
     ArrowDown,
+    /// Momentary Ctrl modifier
+    Ctrl,
+    /// Momentary Alt modifier
+    Alt,
+    /// Momentary Win / Super modifier
+    Win,
+    /// Home navigation key
+    Home,
+    /// End navigation key
+    End,
+    /// Visual-only key (e.g. Mic): renders but performs no action
+    None,
 }
 
 #[derive(Debug, Clone)]

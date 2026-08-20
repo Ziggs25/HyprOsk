@@ -27,8 +27,8 @@ impl IpcServer {
     pub fn send_command(cmd: &str) -> anyhow::Result<String> {
         let socket_path = Self::get_socket_path();
         let mut stream = UnixStream::connect(&socket_path)?;
-        stream.write_all(cmd.as_bytes())?;
-        stream.write_all(b"\n")?;
+        stream.write_all(format!("{}\n", cmd.trim()).as_bytes())?;
+        stream.flush()?;
 
         let mut buf = [0u8; 1024];
         let n = stream.read(&mut buf)?;
@@ -54,6 +54,9 @@ impl IpcServer {
                     Ok(mut s) => {
                         let mut buf = [0u8; 256];
                         if let Ok(n) = s.read(&mut buf) {
+                            if n == 0 {
+                                continue;
+                            }
                             let text = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                             let (resp, cmd) = match text.as_str() {
                                 "show" => ("OK: Shown\n", Some(IpcCommand::Show)),
@@ -68,6 +71,7 @@ impl IpcServer {
                             };
 
                             let _ = s.write_all(resp.as_bytes());
+                            let _ = s.flush();
                             if let Some(c) = cmd {
                                 let _ = tx.send(c);
                             }

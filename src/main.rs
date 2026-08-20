@@ -29,7 +29,7 @@ enum Commands {
     Hide,
     /// Toggle on-screen keyboard visibility
     Toggle,
-    /// Switch active keyboard layer (lower, upper, numbers, symbols, nav, emoji)
+    /// Switch active keyboard layer (lower, upper, symbols)
     Layer {
         name: String,
     },

@@ -22,19 +22,21 @@ impl RenderEngine {
         layout: &KeyboardLayout,
         total_width: u32,
         total_height: u32,
-        theme: &Theme,
+        _theme: &Theme,
     ) -> Vec<Vec<(Rect, usize)>> {
         let padding_x = 8.0;
         let padding_y = 8.0;
-        let spacing = theme.key_spacing;
+        let spacing = 8.0;
         let num_rows = layout.rows.len();
 
         if num_rows == 0 {
             return Vec::new();
         }
 
-        // Top suggestion row is slightly slimmer (32px) than regular key rows
-        let top_row_height = 36.0;
+        // Wireframe: suggestion bar is 44px, regular key rows are 80px each.
+        // With margins 8px and gaps 8px this yields exactly 80px keys at the
+        // default 420px keyboard height.
+        let top_row_height = 44.0;
         let remaining_height = (total_height as f32 - (2.0 * padding_y) - top_row_height - (num_rows as f32 * spacing)).max(10.0);
         let key_row_height = (remaining_height / (num_rows - 1).max(1) as f32).max(10.0);
 

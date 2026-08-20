@@ -8,7 +8,7 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
     },
     shell::wlr_layer::{
-        Anchor, KeyboardInteractivity, LayerShell, LayerSurface,
+        LayerShell, LayerSurface,
     },
     shell::WaylandSurface,
     shm::{
@@ -19,6 +19,8 @@ use smithay_client_toolkit::{
     delegate_seat, delegate_shm, delegate_touch, registry_handlers,
 };
 use std::os::fd::AsFd;
+use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use wayland_client::{
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch, wl_shm},
@@ -36,6 +38,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 use crate::config::Config;
 use crate::layout::{key::KeyAction, KeyboardLayout, LayerId};
 use crate::render::engine::RenderEngine;
+use crate::render::slint::SlintScene;
 use crate::render::theme::Theme;
 use crate::suggest::SuggestEngine;
 use crate::wayland::input_method::InputMethodState;
@@ -47,10 +50,16 @@ const KEY_ESC: u32 = 1;
 const KEY_BACKSPACE: u32 = 14;
 const KEY_TAB: u32 = 15;
 const KEY_ENTER: u32 = 28;
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTALT: u32 = 56;
+const KEY_SPACE: u32 = 57;
+const KEY_LEFTMETA: u32 = 125; // Win / Super
 const KEY_LEFT: u32 = 105;
 const KEY_RIGHT: u32 = 106;
 const KEY_UP: u32 = 103;
 const KEY_DOWN: u32 = 108;
+const KEY_HOME: u32 = 102;
+const KEY_END: u32 = 107;
 
 pub struct WaylandState {
     // SCTK base states
@@ -72,6 +81,7 @@ pub struct WaylandState {
     pub layer_surface: Option<LayerSurface>,
     pub is_configured: bool,
     pub is_visible: bool,
+    pub manually_shown: bool,
     pub is_running: bool,
     pub width: u32,
     pub height: u32,
@@ -84,6 +94,8 @@ pub struct WaylandState {
     pub config: Config,
     pub suggest_engine: SuggestEngine,
     pub pressed_key: Option<(usize, usize)>,
+    /// Slint headless paint scene (lazily initialized on first redraw).
+    pub slint_scene: Option<SlintScene>,
 
     // Spacebar Glide / Swipe Cursor Navigation
     pub space_touch_start: Option<(f64, f64)>,
@@ -124,6 +136,7 @@ impl WaylandState {
             layer_surface: None,
             is_configured: false,
             is_visible: false,
+            manually_shown: false,
             is_running: true,
             width: 1000,
             height,
@@ -134,6 +147,7 @@ impl WaylandState {
             config,
             suggest_engine,
             pressed_key: None,
+            slint_scene: None,
             space_touch_start: None,
             space_last_x: 0.0,
             is_space_swiping: false,
@@ -154,6 +168,7 @@ impl WaylandState {
         }
         tracing::info!("Showing HyprOsk on-screen keyboard");
         self.is_visible = true;
+        self.manually_shown = true;
         self.init_surface(qh);
 
         if let Some(ref surface) = self.layer_surface {
@@ -176,6 +191,8 @@ impl WaylandState {
         }
         tracing::info!("Hiding HyprOsk on-screen keyboard");
         self.is_visible = false;
+        self.is_configured = false;
+        self.manually_shown = false;
         if let Some(ref surface) = self.layer_surface {
             surface.set_exclusive_zone(0);
             surface.wl_surface().attach(None, 0, 0);
@@ -204,7 +221,7 @@ impl WaylandState {
 
     pub fn adapt_layout_for_content_purpose(&mut self, purpose: u32, qh: &QueueHandle<Self>) {
         if (2..=5).contains(&purpose) {
-            self.switch_layer(LayerId::Numbers, qh);
+            self.switch_layer(LayerId::Symbols, qh);
         }
     }
 
@@ -239,6 +256,39 @@ impl WaylandState {
             self.pressed_key,
             self.swipe_offset,
         );
+        // Paint swap: render the Wireframe scene through Slint when available.
+        if self.slint_scene.is_none() {
+            match SlintScene::new(width, height) {
+                Ok(scene) => self.slint_scene = Some(scene),
+                Err(e) => {
+                    tracing::warn!("Slint renderer unavailable, using legacy renderer: {e:?}");
+                }
+            }
+        }
+        if let Some(scene) = self.slint_scene.as_mut() {
+            if scene.render(
+                &self.layout,
+                &self.theme,
+                width,
+                height,
+                self.pressed_key,
+                self.swipe_offset,
+                canvas,
+            ) {
+                tracing::trace!("Painted frame via Slint scene ({}x{})", width, height);
+            } else {
+                tracing::warn!("Slint frame render failed, falling back to legacy renderer");
+                RenderEngine::render(
+                    canvas,
+                    width,
+                    height,
+                    &self.layout,
+                    &self.theme,
+                    self.pressed_key,
+                    self.swipe_offset,
+                );
+            }
+        }
 
         if let Some(ref surface) = self.layer_surface {
             buffer.attach_to(surface.wl_surface()).expect("Failed to attach buffer");
@@ -275,9 +325,9 @@ impl WaylandState {
             }
             KeyAction::Suggestion(idx) => {
                 if let Some(chosen_word) = self.suggest_engine.candidates.get(idx).cloned() {
-                    let preedit_len = self.suggest_engine.current_word.chars().count() as u32;
-                    if preedit_len > 0 {
-                        self.delete_surrounding(preedit_len, 0);
+                    let preedit_len = self.suggest_engine.current_word.chars().count();
+                    for _ in 0..preedit_len {
+                        self.send_backspace();
                     }
                     self.send_text(&format!("{} ", chosen_word));
                     self.suggest_engine.clear();
@@ -313,6 +363,7 @@ impl WaylandState {
                 self.current_layer = layer;
             }
             KeyAction::Hide => {
+                self.manually_shown = false;
                 self.hide_keyboard(qh);
             }
             KeyAction::ArrowLeft => {
@@ -332,6 +383,30 @@ impl WaylandState {
             }
             KeyAction::Paste => {
                 tracing::info!("Paste requested");
+                if let Ok(output) = Command::new("wl-paste").arg("--no-newline").output()
+                    && let Ok(text) = String::from_utf8(output.stdout)
+                    && !text.is_empty()
+                {
+                    self.send_text(&text);
+                }
+            }
+            KeyAction::Ctrl => {
+                self.send_keycode(KEY_LEFTCTRL);
+            }
+            KeyAction::Alt => {
+                self.send_keycode(KEY_LEFTALT);
+            }
+            KeyAction::Win => {
+                self.send_keycode(KEY_LEFTMETA);
+            }
+            KeyAction::Home => {
+                self.send_keycode(KEY_HOME);
+            }
+            KeyAction::End => {
+                self.send_keycode(KEY_END);
+            }
+            KeyAction::None => {
+                // Visual-only key (e.g. Mic): renders but performs no action
             }
             _ => {}
         }
@@ -340,13 +415,13 @@ impl WaylandState {
     }
 
     pub fn handle_key_release(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
-        if let Some(row) = self.layout.rows.get(r_idx) {
-            if let Some(key) = row.keys.get(k_idx) {
-                if matches!(key.action, KeyAction::Space) && !self.is_space_swiping {
-                    self.suggest_engine.clear();
-                    self.send_text(" ");
-                }
-            }
+        if let Some(row) = self.layout.rows.get(r_idx)
+            && let Some(key) = row.keys.get(k_idx)
+            && matches!(key.action, KeyAction::Space)
+            && !self.is_space_swiping
+        {
+            self.suggest_engine.clear();
+            self.send_space();
         }
 
         self.pressed_key = None;
@@ -377,42 +452,44 @@ impl WaylandState {
     }
 
     pub fn send_text(&mut self, text: &str) {
-        if let Some(ref im) = self.input_method {
+        let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
+        if is_im_active
+            && let Some(ref im) = self.input_method
+        {
             im.commit_string(text.to_string());
             im.commit(self.im_state.serial);
             self.im_state.serial = self.im_state.serial.wrapping_add(1);
+            return;
         }
-    }
 
-    pub fn delete_surrounding(&mut self, before: u32, after: u32) {
-        if let Some(ref im) = self.input_method {
-            im.delete_surrounding_text(before, after);
-            im.commit(self.im_state.serial);
-            self.im_state.serial = self.im_state.serial.wrapping_add(1);
+        // Universal Virtual Keyboard Fallback for Terminal Emulators (Herdr, Foot, Kitty, etc.)
+        for ch in text.chars() {
+            if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
+                self.send_key_with_modifiers(keycode, shift);
+            }
         }
     }
 
     pub fn send_backspace(&mut self) {
-        if self.input_method.is_some() {
-            self.delete_surrounding(1, 0);
-        } else {
-            self.send_keycode(KEY_BACKSPACE);
-        }
+        // ALWAYS emit raw evdev KEY_BACKSPACE (14) via virtual keyboard!
+        // This is 100% stable and prevents terminal emulator exits/crashes.
+        self.send_keycode(KEY_BACKSPACE);
     }
 
     pub fn send_enter(&mut self) {
-        if self.input_method.is_some() {
-            self.send_text("\n");
-        } else {
-            self.send_keycode(KEY_ENTER);
-        }
+        self.send_keycode(KEY_ENTER);
     }
 
     pub fn send_tab(&mut self) {
-        if self.input_method.is_some() {
-            self.send_text("\t");
+        self.send_keycode(KEY_TAB);
+    }
+
+    pub fn send_space(&mut self) {
+        let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
+        if is_im_active {
+            self.send_text(" ");
         } else {
-            self.send_keycode(KEY_TAB);
+            self.send_keycode(KEY_SPACE);
         }
     }
 
@@ -437,31 +514,26 @@ impl WaylandState {
     }
 
     pub fn send_keycode(&mut self, keycode: u32) {
+        self.send_key_with_modifiers(keycode, false);
+    }
+
+    pub fn send_key_with_modifiers(&mut self, keycode: u32, shift: bool) {
         let time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u32);
 
         if let Some(ref vk) = self.virtual_keyboard {
+            if shift {
+                vk.modifiers(1, 0, 0, 0); // Shift depressed
+            }
             vk.key(time, keycode, wl_keyboard::KeyState::Pressed.into());
             vk.key(time, keycode, wl_keyboard::KeyState::Released.into());
+            if shift {
+                vk.modifiers(0, 0, 0, 0); // Reset modifiers
+            }
         } else {
             tracing::warn!("No virtual keyboard bound; dropping keycode {keycode}");
         }
-    }
-
-    pub fn send_keysym(&mut self, keysym: u32) {
-        let keycode = match keysym {
-            0xff08 => KEY_BACKSPACE,
-            0xff09 => KEY_TAB,
-            0xff0d => KEY_ENTER,
-            0xff1b => KEY_ESC,
-            0xff51 => KEY_LEFT,
-            0xff52 => KEY_UP,
-            0xff53 => KEY_RIGHT,
-            0xff54 => KEY_DOWN,
-            _ => return,
-        };
-        self.send_keycode(keycode);
     }
 
     pub fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) {
@@ -642,4 +714,113 @@ impl TouchHandler for WaylandState {
 
     fn shape(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _major: f64, _minor: f64) {}
     fn orientation(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _orientation: f64) {}
+}
+
+/// Linux evdev keycode mapping for US QWERTY virtual keyboard fallback
+pub fn char_to_keycode_and_shift(ch: char) -> Option<(u32, bool)> {
+    match ch {
+        'a' => Some((30, false)),
+        'b' => Some((48, false)),
+        'c' => Some((46, false)),
+        'd' => Some((32, false)),
+        'e' => Some((18, false)),
+        'f' => Some((33, false)),
+        'g' => Some((34, false)),
+        'h' => Some((35, false)),
+        'i' => Some((23, false)),
+        'j' => Some((36, false)),
+        'k' => Some((37, false)),
+        'l' => Some((38, false)),
+        'm' => Some((50, false)),
+        'n' => Some((49, false)),
+        'o' => Some((24, false)),
+        'p' => Some((25, false)),
+        'q' => Some((16, false)),
+        'r' => Some((19, false)),
+        's' => Some((31, false)),
+        't' => Some((20, false)),
+        'u' => Some((22, false)),
+        'v' => Some((47, false)),
+        'w' => Some((17, false)),
+        'x' => Some((45, false)),
+        'y' => Some((21, false)),
+        'z' => Some((44, false)),
+
+        'A' => Some((30, true)),
+        'B' => Some((48, true)),
+        'C' => Some((46, true)),
+        'D' => Some((32, true)),
+        'E' => Some((18, true)),
+        'F' => Some((33, true)),
+        'G' => Some((34, true)),
+        'H' => Some((35, true)),
+        'I' => Some((23, true)),
+        'J' => Some((36, true)),
+        'K' => Some((37, true)),
+        'L' => Some((38, true)),
+        'M' => Some((50, true)),
+        'N' => Some((49, true)),
+        'O' => Some((24, true)),
+        'P' => Some((25, true)),
+        'Q' => Some((16, true)),
+        'R' => Some((19, true)),
+        'S' => Some((31, true)),
+        'T' => Some((20, true)),
+        'U' => Some((22, true)),
+        'V' => Some((47, true)),
+        'W' => Some((17, true)),
+        'X' => Some((45, true)),
+        'Y' => Some((21, true)),
+        'Z' => Some((44, true)),
+
+        '1' => Some((2, false)),
+        '2' => Some((3, false)),
+        '3' => Some((4, false)),
+        '4' => Some((5, false)),
+        '5' => Some((6, false)),
+        '6' => Some((7, false)),
+        '7' => Some((8, false)),
+        '8' => Some((9, false)),
+        '9' => Some((10, false)),
+        '0' => Some((11, false)),
+
+        '!' => Some((2, true)),
+        '@' => Some((3, true)),
+        '#' => Some((4, true)),
+        '$' => Some((5, true)),
+        '%' => Some((6, true)),
+        '^' => Some((7, true)),
+        '&' => Some((8, true)),
+        '*' => Some((9, true)),
+        '(' => Some((10, true)),
+        ')' => Some((11, true)),
+
+        '-' => Some((12, false)),
+        '_' => Some((12, true)),
+        '=' => Some((13, false)),
+        '+' => Some((13, true)),
+        '[' => Some((26, false)),
+        '{' => Some((26, true)),
+        ']' => Some((27, false)),
+        '}' => Some((27, true)),
+        '\\' => Some((43, false)),
+        '|' => Some((43, true)),
+        ';' => Some((39, false)),
+        ':' => Some((39, true)),
+        '\'' => Some((40, false)),
+        '"' => Some((40, true)),
+        '`' => Some((41, false)),
+        '~' => Some((41, true)),
+        ',' => Some((51, false)),
+        '<' => Some((51, true)),
+        '.' => Some((52, false)),
+        '>' => Some((52, true)),
+        '/' => Some((53, false)),
+        '?' => Some((53, true)),
+        ' ' => Some((KEY_SPACE, false)),
+        '\n' => Some((KEY_ENTER, false)),
+        '\t' => Some((KEY_TAB, false)),
+
+        _ => None,
+    }
 }

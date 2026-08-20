@@ -1,0 +1,168 @@
+import "fonts/DejaVuSans.ttf";
+
+export struct Key {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    label: string,
+    sub: string,
+    icon: int,
+    is-pressed: bool,
+    is-suggestion: bool,
+}
+
+component KeyVisual {
+    in property <Key> k;
+    in property <int> pressed-index: -1;
+    in property <length> key-radius: 16px;
+    in property <color> key-bg: #2d2d2d;
+    in property <color> key-bg-pressed: #1e1e1e;
+    in property <color> key-bottom-edge: #222;
+    in property <color> text-color: #fff;
+    in property <color> sub-color: #c8c8c8;
+    in property <color> suggest-bg: rgba(255, 255, 255, 0.04);
+    in property <image> icon-img;
+    in property <bool> is-special: false;
+    in property <length> label-size: 26px;
+    in property <length> sub-size: 15px;
+    in property <length> icon-size: 30px;
+
+    width: k.w;
+    height: k.h;
+    x: k.x;
+    y: k.y;
+
+    Rectangle {
+        background: k.is-suggestion ? suggest-bg
+            : (k.is-pressed ? key-bg-pressed : key-bg);
+        border-radius: k.is-suggestion ? 8px : key-radius;
+        border-width: k.is-pressed ? 2px : 0px;
+        border-color: #0d0d0d;
+        Rectangle {
+            visible: !k.is-suggestion;
+            y: parent.height - 2px;
+            width: parent.width;
+            height: 2px;
+            background: key-bottom-edge;
+            border-radius: 1px;
+        }
+        Image {
+            visible: is-special && !k.is-suggestion;
+            x: (parent.width - icon-size) / 2;
+            y: (parent.height - icon-size) / 2;
+            width: icon-size;
+            height: icon-size;
+            source: icon-img;
+            image-fit: contain;
+        }
+        Text {
+            visible: !is-special && k.sub == "";
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            text: k.label;
+            font-size: k.is-suggestion ? 22px : label-size;
+            font-weight: k.is-suggestion ? 700 : 400;
+            color: text-color;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            visible: !is-special && k.sub != "";
+            x: 8px;
+            y: 4px;
+            width: 40px;
+            height: 20px;
+            text: k.sub;
+            font-size: sub-size;
+            color: sub-color;
+        }
+        Text {
+            visible: !is-special && k.sub != "";
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            text: k.label;
+            font-size: label-size;
+            color: text-color;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component OskUi inherits Window {
+    default-font-family: "DejaVu Sans";
+    default-font-size: 26px;
+    background: transparent;
+
+    in property <[Key]> keys;
+    in property <int> pressed-index: -1;
+
+    in property <length> key-gap: 8px;
+    in property <length> key-radius: 16px;
+    in property <color> dock-bg: #1a1a1a;
+    in property <color> key-bg: #2d2d2d;
+    in property <color> key-bg-pressed: #1e1e1e;
+    in property <color> key-bottom-edge: #222;
+    in property <color> text-color: #fff;
+    in property <color> sub-color: #c8c8c8;
+    in property <color> suggest-bg: rgba(255, 255, 255, 0.04);
+    in property <color> divider-color: rgba(255, 255, 255, 0.28);
+    in property <length> suggest-h: 44px;
+    in property <length> label-size: 26px;
+    in property <length> sub-size: 15px;
+    in property <length> icon-size: 30px;
+
+    in property <image> icon-backspace;
+    in property <image> icon-enter;
+    in property <image> icon-shift;
+    in property <image> icon-win;
+    in property <image> icon-mic;
+    in property <image> icon-arrow-l;
+    in property <image> icon-arrow-r;
+    in property <image> icon-arrow-u;
+    in property <image> icon-arrow-d;
+    in property <image> icon-gear;
+    in property <image> icon-palette;
+    in property <image> icon-dock;
+    in property <image> icon-dismiss;
+
+    Rectangle {
+        background: dock-bg;
+        border-top-left-radius: 24px;
+        border-top-right-radius: 24px;
+    }
+
+    for k[i] in keys: KeyVisual {
+        k: k;
+        pressed-index: root.pressed-index;
+        key-radius: root.key-radius;
+        key-bg: root.key-bg;
+        key-bg-pressed: root.key-bg-pressed;
+        key-bottom-edge: root.key-bottom-edge;
+        text-color: root.text-color;
+        sub-color: root.sub-color;
+        suggest-bg: root.suggest-bg;
+        label-size: root.label-size;
+        sub-size: root.sub-size;
+        icon-size: root.icon-size;
+        is-special: k.icon > 0;
+        icon-img: k.icon == 1 ? root.icon-backspace
+                : k.icon == 2 ? root.icon-enter
+                : k.icon == 3 ? root.icon-shift
+                : k.icon == 4 ? root.icon-win
+                : k.icon == 5 ? root.icon-mic
+                : k.icon == 6 ? root.icon-arrow-l
+                : k.icon == 7 ? root.icon-arrow-r
+                : k.icon == 8 ? root.icon-arrow-u
+                : k.icon == 9 ? root.icon-arrow-d
+                : k.icon == 10 ? root.icon-gear
+                : k.icon == 11 ? root.icon-palette
+                : k.icon == 12 ? root.icon-dock
+                : root.icon-dismiss;
+    }
+}

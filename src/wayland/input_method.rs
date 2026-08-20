@@ -44,12 +44,14 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
                 state.im_state.is_active.store(true, Ordering::SeqCst);
                 if state.config.behavior.auto_show {
                     state.show_keyboard(qh);
+                    // If triggered by auto-show, allow auto-hide on blur
+                    state.manually_shown = false;
                 }
             }
             zwp_input_method_v2::Event::Deactivate => {
-                tracing::info!("Received text-input Deactivate event -> Auto-hiding HyprOsk");
+                tracing::info!("Received text-input Deactivate event (manually_shown={})", state.manually_shown);
                 state.im_state.is_active.store(false, Ordering::SeqCst);
-                if state.config.behavior.auto_show {
+                if state.config.behavior.auto_hide && !state.manually_shown {
                     state.hide_keyboard(qh);
                 }
             }
