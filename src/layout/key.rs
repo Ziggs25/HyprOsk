@@ -4,8 +4,10 @@ pub enum LayerId {
     Lower,
     /// QWERTY letters (uppercase, via Shift)
     Upper,
-    /// Symbols & numbers (wireframe Layout B)
+    /// Symbols page 1: numbers & primary symbols (wireframe-2 View 3)
     Symbols,
+    /// Symbols page 2: extended symbols & currency (wireframe-2 View 4)
+    Symbols2,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +27,10 @@ pub enum KeyAction {
     Hide,
     Copy,
     Paste,
+    /// Toggle the clipboard history view (replaces the key rows).
+    Clipboard,
+    /// Paste the clipboard history entry at the given index.
+    ClipboardItem(usize),
     ArrowLeft,
     ArrowRight,
     ArrowUp,

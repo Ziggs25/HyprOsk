@@ -33,10 +33,8 @@ impl RenderEngine {
             return Vec::new();
         }
 
-        // Wireframe: suggestion bar is 44px, regular key rows are 80px each.
-        // With margins 8px and gaps 8px this yields exactly 80px keys at the
-        // default 420px keyboard height.
-        let top_row_height = 44.0;
+        // Windows-11 OSK: top action bar is 46px, key rows 80px each.
+        let top_row_height = 46.0;
         let remaining_height = (total_height as f32 - (2.0 * padding_y) - top_row_height - (num_rows as f32 * spacing)).max(10.0);
         let key_row_height = (remaining_height / (num_rows - 1).max(1) as f32).max(10.0);
 

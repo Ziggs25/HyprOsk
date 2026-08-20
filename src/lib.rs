@@ -119,6 +119,7 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                     let layer = match layer_name.to_lowercase().as_str() {
                         "upper" | "shift" | "caps" => LayerId::Upper,
                         "symbols" | "sym" | "123" | "num" | "numbers" => LayerId::Symbols,
+                        "symbols2" | "sym2" => LayerId::Symbols2,
                         _ => LayerId::Lower,
                     };
                     state.switch_layer(layer, &qh);

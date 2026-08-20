@@ -10,45 +10,47 @@ export struct Key {
     icon: int,
     is-pressed: bool,
     is-suggestion: bool,
+    is-functional: bool,
+    is-space: bool,
 }
 
 component KeyVisual {
     in property <Key> k;
     in property <int> pressed-index: -1;
     in property <length> key-radius: 16px;
-    in property <color> key-bg: #2d2d2d;
-    in property <color> key-bg-pressed: #1e1e1e;
-    in property <color> key-bottom-edge: #222;
+    in property <length> space-radius: 20px;
+    in property <color> key-bg: #1c1c1c;
+    in property <color> key-bg-pressed: #141414;
+    in property <color> suggest-bg: rgba(255, 255, 255, 0.05);
+    in property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
     in property <color> text-color: #fff;
-    in property <color> sub-color: #c8c8c8;
-    in property <color> suggest-bg: rgba(255, 255, 255, 0.04);
+    in property <color> sub-color: #8c8c8c;
+    in property <length> suggest-text-size: 21px;
     in property <image> icon-img;
-    in property <bool> is-special: false;
-    in property <length> label-size: 26px;
-    in property <length> sub-size: 15px;
-    in property <length> icon-size: 30px;
+    in property <length> label-size: 27px;
+    in property <length> sub-size: 14px;
+    in property <length> icon-size: 24px;
 
     width: k.w;
     height: k.h;
     x: k.x;
     y: k.y;
 
+    // Inactive suggestion slots (no word being typed) are invisible.
+    visible: !(k.is-suggestion && k.label == "");
+    opacity: k.is-suggestion && k.label == "" ? 0.0 : 1.0;
+
     Rectangle {
-        background: k.is-suggestion ? suggest-bg
+        x: k.is-pressed ? 2px : 0px;
+        y: k.is-pressed ? 2px : 0px;
+        width: k.w - (k.is-pressed ? 4px : 0px);
+        height: k.h - (k.is-pressed ? 4px : 0px);
+        background: k.is-suggestion
+            ? (k.is-pressed ? suggest-bg-pressed : suggest-bg)
             : (k.is-pressed ? key-bg-pressed : key-bg);
-        border-radius: k.is-suggestion ? 8px : key-radius;
-        border-width: k.is-pressed ? 2px : 0px;
-        border-color: #0d0d0d;
-        Rectangle {
-            visible: !k.is-suggestion;
-            y: parent.height - 2px;
-            width: parent.width;
-            height: 2px;
-            background: key-bottom-edge;
-            border-radius: 1px;
-        }
+        border-radius: k.is-suggestion ? 8px : (k.is-space ? space-radius : key-radius);
         Image {
-            visible: is-special && !k.is-suggestion;
+            visible: k.icon > 0 && !k.is-suggestion;
             x: (parent.width - icon-size) / 2;
             y: (parent.height - icon-size) / 2;
             width: icon-size;
@@ -57,65 +59,67 @@ component KeyVisual {
             image-fit: contain;
         }
         Text {
-            visible: !is-special && k.sub == "";
+            visible: k.icon <= 0 && !k.is-suggestion;
             x: 0;
             y: 0;
             width: parent.width;
             height: parent.height;
             text: k.label;
-            font-size: k.is-suggestion ? 22px : label-size;
-            font-weight: k.is-suggestion ? 700 : 400;
+            font-size: k.is-functional ? 21px : label-size;
+            font-weight: 400;
             color: text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         Text {
-            visible: !is-special && k.sub != "";
-            x: 8px;
-            y: 4px;
+            visible: k.is-suggestion;
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            text: k.label;
+            font-size: suggest-text-size;
+            font-weight: 500;
+            color: text-color;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Text {
+            visible: !k.is-suggestion && k.sub != "";
+            x: 10px;
+            y: 6px;
             width: 40px;
-            height: 20px;
+            height: 18px;
             text: k.sub;
             font-size: sub-size;
             color: sub-color;
-        }
-        Text {
-            visible: !is-special && k.sub != "";
-            x: 0;
-            y: 0;
-            width: parent.width;
-            height: parent.height;
-            text: k.label;
-            font-size: label-size;
-            color: text-color;
-            horizontal-alignment: center;
-            vertical-alignment: center;
         }
     }
 }
 
 export component OskUi inherits Window {
     default-font-family: "DejaVu Sans";
-    default-font-size: 26px;
+    default-font-size: 27px;
     background: transparent;
 
     in property <[Key]> keys;
     in property <int> pressed-index: -1;
+    in property <int> panel-mode: 0;
 
     in property <length> key-gap: 8px;
     in property <length> key-radius: 16px;
-    in property <color> dock-bg: #1a1a1a;
-    in property <color> key-bg: #2d2d2d;
-    in property <color> key-bg-pressed: #1e1e1e;
-    in property <color> key-bottom-edge: #222;
+    in property <length> space-radius: 20px;
+    in property <color> dock-bg: #000000;
+    in property <color> key-bg: #1c1c1c;
+    in property <color> key-bg-pressed: #141414;
     in property <color> text-color: #fff;
-    in property <color> sub-color: #c8c8c8;
-    in property <color> suggest-bg: rgba(255, 255, 255, 0.04);
-    in property <color> divider-color: rgba(255, 255, 255, 0.28);
-    in property <length> suggest-h: 44px;
-    in property <length> label-size: 26px;
-    in property <length> sub-size: 15px;
-    in property <length> icon-size: 30px;
+    in property <color> sub-color: #8c8c8c;
+    in property <color> suggest-bg: rgba(255, 255, 255, 0.05);
+    in property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
+    in property <length> suggest-text-size: 21px;
+    in property <length> label-size: 27px;
+    in property <length> sub-size: 14px;
+    in property <length> icon-size: 24px;
 
     in property <image> icon-backspace;
     in property <image> icon-enter;
@@ -128,29 +132,28 @@ export component OskUi inherits Window {
     in property <image> icon-arrow-d;
     in property <image> icon-gear;
     in property <image> icon-palette;
-    in property <image> icon-dock;
     in property <image> icon-dismiss;
+    in property <image> icon-clipboard;
 
     Rectangle {
         background: dock-bg;
-        border-top-left-radius: 24px;
-        border-top-right-radius: 24px;
     }
 
     for k[i] in keys: KeyVisual {
         k: k;
         pressed-index: root.pressed-index;
         key-radius: root.key-radius;
+        space-radius: root.space-radius;
         key-bg: root.key-bg;
         key-bg-pressed: root.key-bg-pressed;
-        key-bottom-edge: root.key-bottom-edge;
         text-color: root.text-color;
         sub-color: root.sub-color;
         suggest-bg: root.suggest-bg;
+        suggest-bg-pressed: root.suggest-bg-pressed;
+        suggest-text-size: root.suggest-text-size;
         label-size: root.label-size;
         sub-size: root.sub-size;
         icon-size: root.icon-size;
-        is-special: k.icon > 0;
         icon-img: k.icon == 1 ? root.icon-backspace
                 : k.icon == 2 ? root.icon-enter
                 : k.icon == 3 ? root.icon-shift
@@ -162,7 +165,7 @@ export component OskUi inherits Window {
                 : k.icon == 9 ? root.icon-arrow-d
                 : k.icon == 10 ? root.icon-gear
                 : k.icon == 11 ? root.icon-palette
-                : k.icon == 12 ? root.icon-dock
-                : root.icon-dismiss;
+                : k.icon == 12 ? root.icon-dismiss
+                : root.icon-clipboard;
     }
 }

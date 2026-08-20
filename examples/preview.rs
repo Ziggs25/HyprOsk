@@ -37,42 +37,107 @@ fn main() {
     assert!(ok);
 
     let mut fails = 0usize;
-    // 1. Rounded top-left corner is fully transparent (alpha 0).
+    // 1. Flush square dock: the top-left corner is solid black (#000000).
     let corner = px(&argb, 2, 2);
-    if close(corner, [0, 0, 0, 0], 8) {
-        println!("corner transparent -> PASS");
+    if close(corner, [0, 0, 0, 255], 8) {
+        println!("square dock corner -> PASS");
     } else {
-        println!("corner alpha FAIL: {corner:?}");
+        println!("corner FAIL: {corner:?}");
         fails += 1;
     }
 
-    // 2. Dock background (#1a1a1a) visible in the gap between key rows.
+    // 2. Dock background (#000000) visible in the gap between key rows.
     let gap_y = (rects[1][0].0.y + rects[1][0].0.h + 3.0) as u32;
     let dock = px(&argb, rects[1][0].0.x as u32 + 2, gap_y);
-    if close(dock, [26, 26, 26, 255], 8) {
+    if close(dock, [0, 0, 0, 255], 8) {
         println!("dock background -> PASS");
     } else {
         println!("dock bg FAIL: got {dock:?}");
         fails += 1;
     }
 
-    // 3. A regular letter key center matches wireframe key_background #2d2d2d.
+    // 3. A regular letter key center matches key background #1c1c1c.
     let key_mid = &rects[1][2].0; // 'w' key
     let mid = px(&argb, (key_mid.x + key_mid.w / 2.0) as u32, (key_mid.y + key_mid.h / 4.0) as u32);
-    if close(mid, [45, 45, 45, 255], 10) {
+    if close(mid, [28, 28, 28, 255], 10) {
         println!("letter key background -> PASS");
     } else {
         println!("letter key bg FAIL: {mid:?}");
         fails += 1;
     }
 
-    // 4. Pressed key (Tab, row 2 col 0) shows the pressed tint (#1e1e1e).
+    // 4. Pressed key (Tab, row 2 col 0) shows the pressed tint (#141414).
     let tab = &rects[2][0].0;
     let pressed = px(&argb, (tab.x + tab.w / 2.0) as u32, (tab.y + tab.h / 3.0) as u32);
-    if close(pressed, [30, 30, 30, 255], 12) {
+    if close(pressed, [20, 20, 20, 255], 12) {
         println!("pressed key tint -> PASS");
     } else {
         println!("pressed-key tint FAIL: {pressed:?}");
+        fails += 1;
+    }
+
+    // 5. 'w' key (row 1 col 2) shows its digit sub-char (#8c8c8c) in the
+    // top-left corner on the lower layer.
+    let w_key = &rects[1][2].0;
+    let mut sub_found = false;
+    for sx in 0..8u32 {
+        for sy in 0..5u32 {
+            let sub = px(&argb, w_key.x as u32 + 10 + sx, w_key.y as u32 + 6 + sy);
+            if close(sub, [140, 140, 140, 255], 35) {
+                sub_found = true;
+            }
+        }
+    }
+    if sub_found {
+        println!("sub-char on 'w' -> PASS");
+    } else {
+        println!("sub-char on 'w' FAIL (no #8c8c8c pixel found)");
+        fails += 1;
+    }
+
+    // 6. Spacebar (row 4) renders blank: no white text pixels in its center.
+    let space = &rects[4].iter().find(|(_, k)| *k == 4).unwrap().0;
+    let blank = {
+        let cx = (space.x + space.w / 2.0) as u32;
+        let cy = (space.y + space.h / 2.0) as u32;
+        let mut blank = true;
+        for sx in 0..20u32 {
+            for sy in 0..10u32 {
+                let p = px(&argb, cx - 10 + sx, cy - 5 + sy);
+                if p[0] > 150 && p[1] > 150 && p[2] > 150 {
+                    blank = false;
+                }
+            }
+        }
+        blank
+    };
+    if blank {
+        println!("blank spacebar -> PASS");
+    } else {
+        println!("blank spacebar FAIL (white text found)");
+        fails += 1;
+    }
+
+    // 7. Suggestion pills show white text on the faint suggest background.
+    let sugg = &rects[0].iter().find(|(_, k)| *k == 2).unwrap().0;
+    let has_text = {
+        let cx = (sugg.x + sugg.w / 2.0) as u32;
+        let cy = (sugg.y + sugg.h / 2.0) as u32;
+        let mut found = false;
+        for sx in 0..6u32 {
+            for sy in 0..4u32 {
+                let p = px(&argb, cx - 3 + sx * 6, cy - 3 + sy * 4);
+                if p[0] > 150 && p[1] > 150 && p[2] > 150 {
+                    found = true;
+                }
+            }
+        }
+        found
+    };
+    if has_text {
+        println!("suggestion pill text -> PASS");
+    } else {
+        println!("suggestion pill text FAIL");
         fails += 1;
     }
 

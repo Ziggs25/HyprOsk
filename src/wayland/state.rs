@@ -18,6 +18,7 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
     delegate_seat, delegate_shm, delegate_touch, registry_handlers,
 };
+use std::collections::VecDeque;
 use std::os::fd::AsFd;
 use std::process::Command;
 use std::sync::atomic::Ordering;
@@ -117,6 +118,11 @@ pub struct WaylandState {
     pub space_last_x: f64,
     pub is_space_swiping: bool,
     pub swipe_offset: Option<f32>,
+
+    // Clipboard history view: when active, the key rows are replaced by the
+    // clipboard grid and `layout` is built from `clipboard_history`.
+    pub clipboard_mode: bool,
+    pub clipboard_history: VecDeque<String>,
 }
 
 impl WaylandState {
@@ -173,6 +179,8 @@ impl WaylandState {
             space_last_x: 0.0,
             is_space_swiping: false,
             swipe_offset: None,
+            clipboard_mode: false,
+            clipboard_history: VecDeque::new(),
         }
     }
 
@@ -219,6 +227,7 @@ impl WaylandState {
             surface.wl_surface().attach(None, 0, 0);
             surface.commit();
         }
+        self.clipboard_mode = false;
         self.suggest_engine.clear();
     }
 
@@ -257,13 +266,49 @@ impl WaylandState {
         }
     }
 
+    /// Toggle the clipboard history view. Opening it refreshes the history
+    /// with whatever `wl-paste` currently holds.
+    pub fn toggle_clipboard(&mut self, qh: &QueueHandle<Self>) {
+        self.clipboard_mode = !self.clipboard_mode;
+        if self.clipboard_mode {
+            self.capture_clipboard();
+        }
+        self.sync_layout_and_redraw(qh);
+    }
+
+    /// Record the current clipboard content into the (capped) history.
+    pub fn capture_clipboard(&mut self) {
+        if let Ok(output) = Command::new("wl-paste").arg("--no-newline").output()
+            && let Ok(text) = String::from_utf8(output.stdout)
+            && !text.is_empty()
+        {
+            self.push_clipboard(text);
+        }
+    }
+
+    pub fn push_clipboard(&mut self, text: String) {
+        if self.clipboard_history.iter().any(|h| *h == text) {
+            return;
+        }
+        self.clipboard_history.push_front(text);
+        while self.clipboard_history.len() > 8 {
+            self.clipboard_history.pop_back();
+        }
+    }
+
     pub fn switch_layer(&mut self, layer: LayerId, qh: &QueueHandle<Self>) {
         self.current_layer = layer;
         self.sync_layout_and_redraw(qh);
     }
 
     pub fn sync_layout_and_redraw(&mut self, qh: &QueueHandle<Self>) {
-        self.layout = KeyboardLayout::get_layout(self.current_layer, &self.suggest_engine.candidates);
+        if self.clipboard_mode {
+            let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
+            self.layout = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
+        } else {
+            self.layout =
+                KeyboardLayout::get_layout(self.current_layer, &self.suggest_engine.candidates);
+        }
         self.redraw(qh);
     }
 
@@ -455,7 +500,7 @@ impl WaylandState {
                 self.send_arrow_down();
             }
             KeyAction::Copy => {
-                tracing::info!("Copy requested");
+                self.capture_clipboard();
             }
             KeyAction::Paste => {
                 tracing::info!("Paste requested");
@@ -463,6 +508,15 @@ impl WaylandState {
                     && let Ok(text) = String::from_utf8(output.stdout)
                     && !text.is_empty()
                 {
+                    self.send_text(&text);
+                    self.push_clipboard(text);
+                }
+            }
+            KeyAction::Clipboard => {
+                self.toggle_clipboard(qh);
+            }
+            KeyAction::ClipboardItem(idx) => {
+                if let Some(text) = self.clipboard_history.get(idx).cloned() {
                     self.send_text(&text);
                 }
             }

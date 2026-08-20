@@ -11,14 +11,15 @@ pub struct KeyboardLayout {
     pub id: LayerId,
 }
 
-/// Wireframe metric weights (see `keyboard wireframe.md`).
+/// Windows 11 OSK metric weights (see `keyboard wireframe-2.md`).
 mod flex {
     pub const ESC: f32 = 1.1;
-    pub const TAB: f32 = 1.4;
-    pub const SHIFT: f32 = 1.8;
-    pub const ENTER: f32 = 1.8;
-    pub const BACKSPACE: f32 = 1.6;
+    pub const TAB: f32 = 1.5;
+    pub const SHIFT: f32 = 2.3;
+    pub const ENTER: f32 = 2.1;
+    pub const BACKSPACE: f32 = 1.5;
     pub const TOGGLE: f32 = 1.25;
+    pub const SYMPAGE: f32 = 2.0;
     pub const MODIFIER: f32 = 1.1; // Ctrl / Alt / Win / Mic / arrows
     pub const SPACE: f32 = 7.2;
 }
@@ -28,41 +29,50 @@ impl KeyboardLayout {
         match id {
             LayerId::Lower => Self::letters(false, suggestions),
             LayerId::Upper => Self::letters(true, suggestions),
-            LayerId::Symbols => Self::symbols(suggestions),
+            LayerId::Symbols => Self::symbols_page1(suggestions),
+            LayerId::Symbols2 => Self::symbols_page2(suggestions),
         }
     }
 
-    /// Windows-11 style suggestion / top-bar row.
+    /// A 46px action bar replacing the old suggestion row.
     ///
-    /// When suggestions are present, shows up to 3 pills with the middle one
-    /// emphasized. In idle mode the slots are padded with placeholder keys so
-    /// the bar keeps its column layout. A dismiss chevron always completes the
-    /// bar on the right.
-    pub fn make_suggestion_row(suggestions: &[String]) -> KeyboardRow {
+    /// Left: Settings (gear) and Theme (palette) icons. Center: up to 3
+    /// auto-suggestion pills shown only while the user is typing a word --
+    /// when idle the slots stay in the model (same icon geometry) but render
+    /// invisible and swallow no input. Right: clipboard history toggle and the
+    /// dismiss chevron (minimizes the keyboard).
+    pub fn make_top_bar(suggestions: &[String]) -> KeyboardRow {
         let mut keys = Vec::new();
+        keys.push(Key::new("gear", KeyAction::None).with_weight(0.1).special());
+        keys.push(Key::new("palette", KeyAction::None).with_weight(0.1).special());
+
         if suggestions.is_empty() {
-            for idx in 0..3 {
-                keys.push(Key::suggestion(idx, "").with_weight(1.0));
+            for _ in 0..3 {
+                keys.push(Key::suggestion(0, ""));
             }
         } else {
             for (idx, cand) in suggestions.iter().take(3).enumerate() {
                 let weight = if idx == 1 { 1.3 } else { 1.0 };
-                let mut k = Key::suggestion(idx, cand).with_weight(weight);
-                if idx == 1 {
-                    k = k.special();
-                }
-                keys.push(k);
+                keys.push(Key::suggestion(idx, cand).with_weight(weight));
             }
         }
-        keys.push(Key::new("▼", KeyAction::Hide).with_weight(0.5).special());
+
+        keys.push(Key::new("", KeyAction::Clipboard).with_weight(0.1).special());
+        keys.push(Key::new("", KeyAction::Hide).with_weight(0.1).special());
         KeyboardRow { keys }
     }
 
-    /// Wireframe Layout A: QWERTY letters (`upper` toggles case).
+    /// The top bar shared by every layer.
+    fn with_top_bar(mut self, suggestions: &[String]) -> Self {
+        self.rows.insert(0, Self::make_top_bar(suggestions));
+        self
+    }
+
+    /// Windows-11 style letter layout (`wireframe-2.md` View 2).
     ///
-    /// Row 1: Esc · 1-0 dual digits on qwertyuiop · Backspace
-    /// Row 2: Tab · asdfghjkl · '(") · Enter
-    /// Row 3: Shift · zxcvbnm · ,(;) .(:) ?(!) · Shift
+    /// Row 1: Esc · q-p + digit sub-chars · Backspace
+    /// Row 2: Tab · a-l + symbol sub-chars · Enter
+    /// Row 3: Shift · z-m + symbol sub-chars · Shift
     /// Row 4: &123 · Ctrl · Win · Alt · Space · Mic · ◀ ▶
     pub fn letters(upper: bool, suggestions: &[String]) -> Self {
         use flex::*;
@@ -72,7 +82,6 @@ impl KeyboardLayout {
             (LayerId::Lower, false)
         };
         let text = |c: char| if upper { c.to_ascii_uppercase() } else { c };
-        let l = |ch: char| Key::text(text(ch));
         let dual = |ch: char, sec: char| {
             if upper {
                 Key::text(text(ch))
@@ -84,7 +93,6 @@ impl KeyboardLayout {
         Self {
             id,
             rows: vec![
-                Self::make_suggestion_row(suggestions),
                 KeyboardRow {
                     keys: vec![
                         Key::new("Esc", KeyAction::Escape).with_weight(ESC).special(),
@@ -104,32 +112,28 @@ impl KeyboardLayout {
                 KeyboardRow {
                     keys: vec![
                         Key::new("Tab", KeyAction::Tab).with_weight(TAB).special(),
-                        l('a'),
-                        l('s'),
-                        l('d'),
-                        l('f'),
-                        l('g'),
-                        l('h'),
-                        l('j'),
-                        l('k'),
-                        l('l'),
-                        Key::text(text('\'')).with_secondary("\""),
+                        dual('a', '@'),
+                        dual('s', '#'),
+                        dual('d', '$'),
+                        dual('f', '%'),
+                        dual('g', '&'),
+                        dual('h', '-'),
+                        dual('j', '+'),
+                        dual('k', '('),
+                        dual('l', ')'),
                         Key::new("⏎", KeyAction::Enter).with_weight(ENTER).special(),
                     ],
                 },
                 KeyboardRow {
                     keys: vec![
                         Key::new("⇧", KeyAction::Shift).with_weight(SHIFT).special(),
-                        l('z'),
-                        l('x'),
-                        l('c'),
-                        l('v'),
-                        l('b'),
-                        l('n'),
-                        l('m'),
-                        Key::text(text(',')).with_secondary(";"),
-                        Key::text(text('.')).with_secondary(":"),
-                        Key::text(text('?')).with_secondary("!"),
+                        dual('z', '*'),
+                        dual('x', '"'),
+                        dual('c', '\''),
+                        dual('v', ':'),
+                        dual('b', ';'),
+                        dual('n', '!'),
+                        dual('m', '?'),
                         Key::new("⇧", KeyAction::Shift).with_weight(SHIFT).special(),
                     ],
                 },
@@ -147,20 +151,20 @@ impl KeyboardLayout {
                 },
             ],
         }
+        .with_top_bar(suggestions)
     }
 
-    /// Wireframe Layout B: symbols & numbers.
+    /// Symbols page 1: numbers & primary symbols (`wireframe-2.md` View 3).
     ///
     /// Row 1: Esc · 1-0 · Backspace
     /// Row 2: Tab · ! @ # $ ^ & _ - = + · Enter
-    /// Row 3: ◀ ▶ · ; : ( ) / ' " ? · Home ▲ End
+    /// Row 3: =\< (page switcher) · ; : ( ) / ' " ? · Home ↑ End
     /// Row 4: abc · Ctrl · Win · Alt · , · Space · . · ◀ ▼ ▶
-    pub fn symbols(suggestions: &[String]) -> Self {
+    pub fn symbols_page1(suggestions: &[String]) -> Self {
         use flex::*;
         Self {
             id: LayerId::Symbols,
             rows: vec![
-                Self::make_suggestion_row(suggestions),
                 KeyboardRow {
                     keys: vec![
                         Key::new("Esc", KeyAction::Escape).with_weight(ESC).special(),
@@ -195,8 +199,7 @@ impl KeyboardLayout {
                 },
                 KeyboardRow {
                     keys: vec![
-                        Key::new("◀", KeyAction::ArrowLeft).with_weight(MODIFIER).special(),
-                        Key::new("▶", KeyAction::ArrowRight).with_weight(MODIFIER).special(),
+                        Key::new("=\\<", KeyAction::SwitchLayer(LayerId::Symbols2)).with_weight(SYMPAGE).special(),
                         Key::text(";"),
                         Key::text(":"),
                         Key::text("("),
@@ -205,9 +208,9 @@ impl KeyboardLayout {
                         Key::text("'"),
                         Key::text("\""),
                         Key::text("?"),
-                        Key::new("Home", KeyAction::Home).with_weight(TAB).special(),
+                        Key::new("Home", KeyAction::Home).special(),
                         Key::new("▲", KeyAction::ArrowUp).with_weight(MODIFIER).special(),
-                        Key::new("End", KeyAction::End).with_weight(TAB).special(),
+                        Key::new("End", KeyAction::End).special(),
                     ],
                 },
                 KeyboardRow {
@@ -226,5 +229,124 @@ impl KeyboardLayout {
                 },
             ],
         }
+        .with_top_bar(suggestions)
     }
+
+    /// Symbols page 2: brackets, currenices & extended symbols
+    /// (`wireframe-2.md` View 4).
+    ///
+    /// Row 1: Esc · ~ ` | [ ] { } < > \ · Backspace
+    /// Row 2: Tab · € £ ¥ ¢ ₹ § ± × ÷ ≠ · Enter
+    /// Row 3: 123 (page switcher) · ° • © ® ™ « » ¿ · Home ↑ End
+    /// Row 4: abc · Ctrl · Win · Alt · , · Space · . · ◀ ▼ ▶
+    pub fn symbols_page2(suggestions: &[String]) -> Self {
+        use flex::*;
+        Self {
+            id: LayerId::Symbols2,
+            rows: vec![
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("Esc", KeyAction::Escape).with_weight(ESC).special(),
+                        Key::text("~"),
+                        Key::text("`"),
+                        Key::text("|"),
+                        Key::text("["),
+                        Key::text("]"),
+                        Key::text("{"),
+                        Key::text("}"),
+                        Key::text("<"),
+                        Key::text(">"),
+                        Key::text("\\"),
+                        Key::new("⌫", KeyAction::Backspace).with_weight(BACKSPACE).special(),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("Tab", KeyAction::Tab).with_weight(TAB).special(),
+                        Key::text("€"),
+                        Key::text("£"),
+                        Key::text("¥"),
+                        Key::text("¢"),
+                        Key::text("₹"),
+                        Key::text("§"),
+                        Key::text("±"),
+                        Key::text("×"),
+                        Key::text("÷"),
+                        Key::text("≠"),
+                        Key::new("⏎", KeyAction::Enter).with_weight(ENTER).special(),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("123", KeyAction::SwitchLayer(LayerId::Symbols)).with_weight(SYMPAGE).special(),
+                        Key::text("°"),
+                        Key::text("•"),
+                        Key::text("©"),
+                        Key::text("®"),
+                        Key::text("™"),
+                        Key::text("«"),
+                        Key::text("»"),
+                        Key::text("¿"),
+                        Key::new("Home", KeyAction::Home).special(),
+                        Key::new("▲", KeyAction::ArrowUp).with_weight(MODIFIER).special(),
+                        Key::new("End", KeyAction::End).special(),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("abc", KeyAction::SwitchLayer(LayerId::Lower)).with_weight(TOGGLE).special(),
+                        Key::new("Ctrl", KeyAction::Ctrl).with_weight(MODIFIER).special(),
+                        Key::new("⊞", KeyAction::Win).with_weight(MODIFIER).special(),
+                        Key::new("Alt", KeyAction::Alt).with_weight(MODIFIER).special(),
+                        Key::text(","),
+                        Key::new("Space", KeyAction::Space).with_weight(SPACE),
+                        Key::text("."),
+                        Key::new("◀", KeyAction::ArrowLeft).with_weight(MODIFIER).special(),
+                        Key::new("▼", KeyAction::ArrowDown).with_weight(MODIFIER).special(),
+                        Key::new("▶", KeyAction::ArrowRight).with_weight(MODIFIER).special(),
+                    ],
+                },
+            ],
+        }
+        .with_top_bar(suggestions)
+    }
+
+    /// Clipboard history view replacing the key rows (`wireframe-2.md` View 1).
+    ///
+    /// Row 1: ◀ Back · header
+    /// Rows 2-3: up to 8 history entries presented as suggestion pills;
+    /// tapping an entry pastes it.
+    #[allow(clippy::needless_lifetimes)]
+    pub fn clipboard(history: &[String], suggestions: &[String]) -> Self {
+        let top = vec![
+            Key::new("◀ Back", KeyAction::Clipboard).with_weight(0.8).special(),
+            Key::new("Clipboard History", KeyAction::None).with_weight(3.0).special(),
+        ];
+
+let mut rows = vec![KeyboardRow { keys: top }];
+        let mut idx = 0usize;
+        for chunk in history.chunks(4) {
+            let row_keys: Vec<Key> = chunk
+                .iter()
+                .map(|text| {
+                    let label = clipboard_label(text);
+                    let key = Key::new(label, KeyAction::ClipboardItem(idx)).special();
+                    idx += 1;
+                    key
+                })
+                .collect();
+            rows.push(KeyboardRow { keys: row_keys });
+        }
+
+        Self { id: LayerId::Lower, rows }.with_top_bar(suggestions)
+    }
+}
+
+fn clipboard_label(text: &str) -> String {
+    let mut label = text.to_string();
+    if label.chars().count() > 26 {
+        let cut: String = label.chars().take(26).collect();
+        label = format!("{cut}…");
+    }
+    label
 }

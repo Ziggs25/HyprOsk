@@ -32,6 +32,10 @@ pub mod icon {
     pub const ARROW_R: i32 = 7;
     pub const ARROW_U: i32 = 8;
     pub const ARROW_D: i32 = 9;
+    pub const GEAR: i32 = 10;
+    pub const PALETTE: i32 = 11;
+    pub const DISMISS: i32 = 12;
+    pub const CLIPBOARD: i32 = 13;
 }
 
 const BACKSPACE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H7.07L2.4 12l4.66-7H22v14zm-11.59-2L14 13.41 17.59 17 19 15.59 15.41 12 19 8.41 17.59 7 14 10.59 10.41 7 9 8.41 12.59 12 9 15.59z"/></svg>"#;
@@ -45,8 +49,8 @@ const ARROW_U_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 const ARROW_D_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M20 9l-8 8-8-8z"/></svg>"#;
 const GEAR_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.58-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>"#;
 const PALETTE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61.35.43.91.66 1.46.54.51-.11.89-.52.94-1.04.08-.85.76-1.51 1.63-1.51h1.5c3.03 0 5.5-2.47 5.5-5.5 0-3.92-3.13-7.1-7-7.1zm-4.5 9c-.83 0-1.5-.67-1.5-1.5S6.67 9 7.5 9 9 9.67 9 10.5 8.33 12 7.5 12zm3-4C9.67 8 9 7.33 9 6.5S9.67 5 10.5 5s1.5.67 1.5 1.5S11.33 8 10.5 8zm3 0c-.83 0-1.5-.67-1.5-1.5S12.67 5 13.5 5s1.5.67 1.5 1.5S14.33 8 13.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S15.67 9 16.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>"#;
-const DOCK_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h4v7H7v-7zm6 3h4v4h-4v-4zm0-3h4v2h-4v-2z"/></svg>"#;
 const DISMISS_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{COLOR}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>"#;
+const CLIPBOARD_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 16H5V5h2v2h10V5h2v14z"/></svg>"#;
 
 fn svg(template: &str, color: &str) -> slint::Image {
     slint::Image::load_from_svg_data(template.replace("{COLOR}", color).as_bytes()).unwrap()
@@ -118,8 +122,8 @@ impl SlintScene {
         ui.set_icon_arrow_d(svg(ARROW_D_SVG, "#fff"));
         ui.set_icon_gear(svg(GEAR_SVG, "#fff"));
         ui.set_icon_palette(svg(PALETTE_SVG, "#fff"));
-        ui.set_icon_dock(svg(DOCK_SVG, "#fff"));
         ui.set_icon_dismiss(svg(DISMISS_SVG, "#fff"));
+        ui.set_icon_clipboard(svg(CLIPBOARD_SVG, "#fff"));
 
         ui.show()?;
         ui.window().dispatch_event(WindowEvent::Resized {
@@ -146,7 +150,11 @@ impl SlintScene {
             KeyAction::ArrowRight => icon::ARROW_R,
             KeyAction::ArrowUp => icon::ARROW_U,
             KeyAction::ArrowDown => icon::ARROW_D,
+            KeyAction::Hide => icon::DISMISS,
+            KeyAction::Clipboard => icon::CLIPBOARD,
             KeyAction::None if label == "🎤" => icon::MIC,
+            KeyAction::None if label == "gear" => icon::GEAR,
+            KeyAction::None if label == "palette" => icon::PALETTE,
             _ => 0,
         }
     }
@@ -187,11 +195,18 @@ impl SlintScene {
                     y: rect.y,
                     w: rect.w,
                     h: rect.h,
-                    label: (if icon > 0 { "" } else { key.label.as_str() }).into(),
+                    label: (if icon > 0 || matches!(key.action, KeyAction::Space) {
+                        ""
+                    } else {
+                        key.label.as_str()
+                    })
+                    .into(),
                     sub: key.secondary_label.clone().unwrap_or_default().into(),
                     icon,
                     is_pressed: pressed_index == flat,
                     is_suggestion: key.is_suggestion,
+                    is_functional: key.is_special,
+                    is_space: matches!(key.action, KeyAction::Space),
                 });
                 flat += 1;
             }
