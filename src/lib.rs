@@ -124,6 +124,9 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                     };
                     state.switch_layer(layer, &qh);
                 }
+                IpcCommand::Clipboard => {
+                    state.toggle_clipboard(&qh);
+                }
             }
         }
 

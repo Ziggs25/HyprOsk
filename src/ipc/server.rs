@@ -10,6 +10,7 @@ pub enum IpcCommand {
     Hide,
     Toggle,
     SwitchLayer(String),
+    Clipboard,
     Quit,
 }
 
@@ -62,6 +63,7 @@ impl IpcServer {
                                 "show" => ("OK: Shown\n", Some(IpcCommand::Show)),
                                 "hide" => ("OK: Hidden\n", Some(IpcCommand::Hide)),
                                 "toggle" => ("OK: Toggled\n", Some(IpcCommand::Toggle)),
+                                "clipboard" => ("OK: Clipboard\n", Some(IpcCommand::Clipboard)),
                                 "quit" => ("OK: Quitting\n", Some(IpcCommand::Quit)),
                                 s if s.starts_with("layer ") => {
                                     let l_name = s.strip_prefix("layer ").unwrap().trim().to_string();

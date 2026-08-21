@@ -21,6 +21,7 @@ use smithay_client_toolkit::{
 use std::collections::VecDeque;
 use std::os::fd::AsFd;
 use std::process::Command;
+use std::time::Instant;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use wayland_client::{
@@ -123,6 +124,9 @@ pub struct WaylandState {
     // clipboard grid and `layout` is built from `clipboard_history`.
     pub clipboard_mode: bool,
     pub clipboard_history: VecDeque<String>,
+
+    // Hold-to-type secondary (sub) characters: press time for the current key.
+    pub press_instant: Option<Instant>,
 }
 
 impl WaylandState {
@@ -181,6 +185,7 @@ impl WaylandState {
             swipe_offset: None,
             clipboard_mode: false,
             clipboard_history: VecDeque::new(),
+            press_instant: None,
         }
     }
 
@@ -419,7 +424,7 @@ impl WaylandState {
     }
 
     pub fn handle_key_press(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
-        let action = {
+        let (action, secondary) = {
             let row = match self.layout.rows.get(r_idx) {
                 Some(r) => r,
                 None => return,
@@ -428,11 +433,17 @@ impl WaylandState {
                 Some(k) => k,
                 None => return,
             };
-            key.action.clone()
+            (key.action.clone(), key.secondary_label.clone())
         };
 
         tracing::debug!("Key pressed: {:?}", action);
         self.pressed_key = Some((r_idx, k_idx));
+        self.press_instant = Some(Instant::now());
+
+        if matches!(action, KeyAction::Text(_)) && secondary.is_some() {
+            self.sync_layout_and_redraw(qh);
+            return;
+        }
 
         match action {
             KeyAction::Text(text) => {
@@ -545,16 +556,41 @@ impl WaylandState {
     }
 
     pub fn handle_key_release(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
-        if let Some(row) = self.layout.rows.get(r_idx)
+        let hold_text = if let Some(row) = self.layout.rows.get(r_idx)
             && let Some(key) = row.keys.get(k_idx)
-            && matches!(key.action, KeyAction::Space)
-            && !self.is_space_swiping
+            && let KeyAction::Text(text) = &key.action
+            && let Some(sec) = &key.secondary_label
         {
+            let elapsed = self.press_instant.map(|t| t.elapsed()).unwrap_or_default();
+            let hold = elapsed.as_millis() > 400;
+            Some(if hold { sec.clone() } else { text.clone() })
+        } else {
+            None
+        };
+
+        let is_space_release = if let Some(row) = self.layout.rows.get(r_idx)
+            && let Some(key) = row.keys.get(k_idx)
+        {
+            matches!(key.action, KeyAction::Space) && !self.is_space_swiping
+        } else {
+            false
+        };
+
+        if let Some(chosen) = hold_text {
+            for ch in chosen.chars() {
+                self.suggest_engine.push_char(ch);
+            }
+            self.send_text(&chosen);
+            if self.current_layer == LayerId::Upper {
+                self.current_layer = LayerId::Lower;
+            }
+        } else if is_space_release {
             self.suggest_engine.clear();
             self.send_space();
         }
 
         self.pressed_key = None;
+        self.press_instant = None;
         self.space_touch_start = None;
         self.is_space_swiping = false;
         self.swipe_offset = None;
@@ -837,6 +873,7 @@ impl TouchHandler for WaylandState {
 
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
         self.pressed_key = None;
+        self.press_instant = None;
         self.space_touch_start = None;
         self.is_space_swiping = false;
         self.swipe_offset = None;

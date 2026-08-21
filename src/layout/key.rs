@@ -59,6 +59,8 @@ pub struct Key {
     pub is_pressed: bool,
     pub is_locked: bool,
     pub is_suggestion: bool,
+    pub is_clipboard: bool,
+    pub is_pinned: bool,
 }
 
 impl Key {
@@ -72,6 +74,8 @@ impl Key {
             is_pressed: false,
             is_locked: false,
             is_suggestion: false,
+            is_clipboard: false,
+            is_pinned: false,
         }
     }
 
@@ -86,6 +90,8 @@ impl Key {
             is_pressed: false,
             is_locked: false,
             is_suggestion: false,
+            is_clipboard: false,
+            is_pinned: false,
         }
     }
 
@@ -99,6 +105,8 @@ impl Key {
             is_pressed: false,
             is_locked: false,
             is_suggestion: true,
+            is_clipboard: false,
+            is_pinned: false,
         }
     }
 
@@ -114,6 +122,16 @@ impl Key {
 
     pub fn special(mut self) -> Self {
         self.is_special = true;
+        self
+    }
+
+    pub fn clipboard(mut self) -> Self {
+        self.is_clipboard = true;
+        self
+    }
+
+    pub fn pinned(mut self) -> Self {
+        self.is_pinned = true;
         self
     }
 }

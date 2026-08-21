@@ -319,18 +319,21 @@ impl KeyboardLayout {
     #[allow(clippy::needless_lifetimes)]
     pub fn clipboard(history: &[String], suggestions: &[String]) -> Self {
         let top = vec![
-            Key::new("◀ Back", KeyAction::Clipboard).with_weight(0.8).special(),
-            Key::new("Clipboard History", KeyAction::None).with_weight(3.0).special(),
+            Key::new("◀ Back", KeyAction::Clipboard).with_weight(0.8).special().clipboard(),
+            Key::new("Clipboard History", KeyAction::None).with_weight(3.0).special().clipboard(),
         ];
 
-let mut rows = vec![KeyboardRow { keys: top }];
+        let mut rows = vec![KeyboardRow { keys: top }];
         let mut idx = 0usize;
         for chunk in history.chunks(4) {
             let row_keys: Vec<Key> = chunk
                 .iter()
                 .map(|text| {
                     let label = clipboard_label(text);
-                    let key = Key::new(label, KeyAction::ClipboardItem(idx)).special();
+                    let mut key = Key::new(label, KeyAction::ClipboardItem(idx)).special().clipboard();
+                    if idx == 0 {
+                        key = key.pinned();
+                    }
                     idx += 1;
                     key
                 })

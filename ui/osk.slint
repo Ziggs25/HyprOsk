@@ -12,6 +12,8 @@ export struct Key {
     is-suggestion: bool,
     is-functional: bool,
     is-space: bool,
+    is-clipboard: bool,
+    is-pinned: bool,
 }
 
 component KeyVisual {
@@ -27,20 +29,76 @@ component KeyVisual {
     in property <color> sub-color: #8c8c8c;
     in property <length> suggest-text-size: 21px;
     in property <image> icon-img;
+    in property <image> icon-pin;
     in property <length> label-size: 27px;
     in property <length> sub-size: 14px;
     in property <length> icon-size: 24px;
+    in property <length> pin-size: 14px;
 
     width: k.w;
     height: k.h;
     x: k.x;
     y: k.y;
 
-    // Inactive suggestion slots (no word being typed) are invisible.
     visible: !(k.is-suggestion && k.label == "");
     opacity: k.is-suggestion && k.label == "" ? 0.0 : 1.0;
 
-    Rectangle {
+    if k.is-clipboard && k.label == "Clipboard History" : Rectangle {
+        background: transparent;
+        Text {
+            x: 0; y: 0; width: parent.width - 30px; height: parent.height;
+            text: k.label;
+            font-size: 19px;
+            font-weight: 600;
+            color: #e0e0e0;
+            horizontal-alignment: left;
+            vertical-alignment: center;
+        }
+        Image {
+            x: parent.width - 22px; y: (parent.height - 16px) / 2;
+            width: 16px; height: 16px;
+            source: icon-pin;
+            colorize: #89b4fa;
+            visible: false;
+        }
+    }
+    if k.is-clipboard && k.label == "◀ Back" : Rectangle {
+        background: k.is-pressed ? #333333 : #222222;
+        border-radius: 12px;
+        Text {
+            x: 0; y: 0; width: parent.width; height: parent.height;
+            text: "⌨ Back";
+            font-size: 15px;
+            font-weight: 500;
+            color: #fff;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    if k.is-clipboard && k.label != "Clipboard History" && k.label != "◀ Back" : Rectangle {
+        x: k.is-pressed ? 1px : 0px;
+        y: k.is-pressed ? 1px : 0px;
+        width: k.w - (k.is-pressed ? 2px : 0px);
+        height: k.h - (k.is-pressed ? 2px : 0px);
+        background: k.is-pressed ? #141414 : #1c1c1c;
+        border-radius: 14px;
+        Text {
+            x: 10px; y: 8px; width: parent.width - 20px; height: parent.height - 16px;
+            text: k.label;
+            font-size: 15px;
+            color: #fff;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+        Image {
+            visible: k.is-pinned;
+            x: parent.width - 18px; y: 8px; width: pin-size; height: pin-size;
+            source: icon-pin;
+            colorize: #89b4fa;
+        }
+    }
+    if !k.is-clipboard : Rectangle {
         x: k.is-pressed ? 2px : 0px;
         y: k.is-pressed ? 2px : 0px;
         width: k.w - (k.is-pressed ? 4px : 0px);
@@ -60,10 +118,7 @@ component KeyVisual {
         }
         Text {
             visible: k.icon <= 0 && !k.is-suggestion;
-            x: 0;
-            y: 0;
-            width: parent.width;
-            height: parent.height;
+            x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
             font-size: k.is-functional ? 21px : label-size;
             font-weight: 400;
@@ -73,10 +128,7 @@ component KeyVisual {
         }
         Text {
             visible: k.is-suggestion;
-            x: 0;
-            y: 0;
-            width: parent.width;
-            height: parent.height;
+            x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
             font-size: suggest-text-size;
             font-weight: 500;
@@ -86,10 +138,7 @@ component KeyVisual {
         }
         Text {
             visible: !k.is-suggestion && k.sub != "";
-            x: 10px;
-            y: 6px;
-            width: 40px;
-            height: 18px;
+            x: 10px; y: 6px; width: 40px; height: 18px;
             text: k.sub;
             font-size: sub-size;
             color: sub-color;
@@ -104,12 +153,13 @@ export component OskUi inherits Window {
 
     in property <[Key]> keys;
     in property <int> pressed-index: -1;
-    in property <int> panel-mode: 0;
+    in property <bool> show-clipboard: false;
 
     in property <length> key-gap: 8px;
     in property <length> key-radius: 16px;
     in property <length> space-radius: 20px;
     in property <color> dock-bg: #000000;
+    in property <color> clipboard-bg: #111111;
     in property <color> key-bg: #1c1c1c;
     in property <color> key-bg-pressed: #141414;
     in property <color> text-color: #fff;
@@ -134,9 +184,38 @@ export component OskUi inherits Window {
     in property <image> icon-palette;
     in property <image> icon-dismiss;
     in property <image> icon-clipboard;
+    in property <image> icon-grave;
+    in property <image> icon-euro;
+    in property <image> icon-sterling;
+    in property <image> icon-yen;
+    in property <image> icon-cent;
+    in property <image> icon-rupee;
+    in property <image> icon-section;
+    in property <image> icon-plusminus;
+    in property <image> icon-multiply;
+    in property <image> icon-divide;
+    in property <image> icon-notequal;
+    in property <image> icon-degree;
+    in property <image> icon-bullet;
+    in property <image> icon-copyright;
+    in property <image> icon-registered;
+    in property <image> icon-trademark;
+    in property <image> icon-guillemotleft;
+    in property <image> icon-guillemotright;
+    in property <image> icon-questiondown;
+    in property <image> icon-pin;
 
     Rectangle {
         background: dock-bg;
+    }
+    Rectangle {
+        visible: root.show-clipboard;
+        x: 8px;
+        y: 62px;
+        width: parent.width - 16px;
+        height: parent.height - 70px;
+        background: clipboard-bg;
+        border-radius: 14px;
     }
 
     for k[i] in keys: KeyVisual {
@@ -166,6 +245,27 @@ export component OskUi inherits Window {
                 : k.icon == 10 ? root.icon-gear
                 : k.icon == 11 ? root.icon-palette
                 : k.icon == 12 ? root.icon-dismiss
-                : root.icon-clipboard;
+                : k.icon == 13 ? root.icon-clipboard
+                : k.icon == 14 ? root.icon-grave
+                : k.icon == 15 ? root.icon-euro
+                : k.icon == 16 ? root.icon-sterling
+                : k.icon == 17 ? root.icon-yen
+                : k.icon == 18 ? root.icon-cent
+                : k.icon == 19 ? root.icon-rupee
+                : k.icon == 20 ? root.icon-section
+                : k.icon == 21 ? root.icon-plusminus
+                : k.icon == 22 ? root.icon-multiply
+                : k.icon == 23 ? root.icon-divide
+                : k.icon == 24 ? root.icon-notequal
+                : k.icon == 25 ? root.icon-degree
+                : k.icon == 26 ? root.icon-bullet
+                : k.icon == 27 ? root.icon-copyright
+                : k.icon == 28 ? root.icon-registered
+                : k.icon == 29 ? root.icon-trademark
+                : k.icon == 30 ? root.icon-guillemotleft
+                : k.icon == 31 ? root.icon-guillemotright
+                : k.icon == 32 ? root.icon-questiondown
+                : root.icon-pin;
+        icon-pin: root.icon-pin;
     }
 }

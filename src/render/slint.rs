@@ -36,6 +36,26 @@ pub mod icon {
     pub const PALETTE: i32 = 11;
     pub const DISMISS: i32 = 12;
     pub const CLIPBOARD: i32 = 13;
+    pub const GRAVE: i32 = 14;
+    pub const EURO: i32 = 15;
+    pub const STERLING: i32 = 16;
+    pub const YEN: i32 = 17;
+    pub const CENT: i32 = 18;
+    pub const RUPEE: i32 = 19;
+    pub const SECTION: i32 = 20;
+    pub const PLUSMINUS: i32 = 21;
+    pub const MULTIPLY: i32 = 22;
+    pub const DIVIDE: i32 = 23;
+    pub const NOTEQUAL: i32 = 24;
+    pub const DEGREE: i32 = 25;
+    pub const BULLET: i32 = 26;
+    pub const COPYRIGHT: i32 = 27;
+    pub const REGISTERED: i32 = 28;
+    pub const TRADEMARK: i32 = 29;
+    pub const GUILLEMOTLEFT: i32 = 30;
+    pub const GUILLEMOTRIGHT: i32 = 31;
+    pub const QUESTIONDOWN: i32 = 32;
+    pub const PIN: i32 = 33;
 }
 
 const BACKSPACE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H7.07L2.4 12l4.66-7H22v14zm-11.59-2L14 13.41 17.59 17 19 15.59 15.41 12 19 8.41 17.59 7 14 10.59 10.41 7 9 8.41 12.59 12 9 15.59z"/></svg>"#;
@@ -51,6 +71,26 @@ const GEAR_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2
 const PALETTE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61.35.43.91.66 1.46.54.51-.11.89-.52.94-1.04.08-.85.76-1.51 1.63-1.51h1.5c3.03 0 5.5-2.47 5.5-5.5 0-3.92-3.13-7.1-7-7.1zm-4.5 9c-.83 0-1.5-.67-1.5-1.5S6.67 9 7.5 9 9 9.67 9 10.5 8.33 12 7.5 12zm3-4C9.67 8 9 7.33 9 6.5S9.67 5 10.5 5s1.5.67 1.5 1.5S11.33 8 10.5 8zm3 0c-.83 0-1.5-.67-1.5-1.5S12.67 5 13.5 5s1.5.67 1.5 1.5S14.33 8 13.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S15.67 9 16.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>"#;
 const DISMISS_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{COLOR}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>"#;
 const CLIPBOARD_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 16H5V5h2v2h10V5h2v14z"/></svg>"#;
+const GRAVE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M367 410 649 784H496L170 410Z"/></svg>"#;
+const EURO_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1167 670V883Q1076 778 991.5 733.0Q907 688 805 688Q648 688 547.0 788.0Q446 888 414 1075H991L936 1198H398Q396 1222 395.5 1245.0Q395 1268 395 1303Q395 1335 395.5 1358.0Q396 1381 398 1405H844L788 1528H414Q446 1715 547.0 1816.0Q648 1917 805 1917Q907 1917 991.5 1872.0Q1076 1827 1167 1722V1933Q1078 2005 985.5 2041.0Q893 2077 797 2077Q560 2077 405.5 1932.0Q251 1787 211 1528H0L55 1405H194Q194 1382 193.5 1358.5Q193 1335 193 1303Q193 1268 193.5 1244.5Q194 1221 194 1198H0L55 1075H211Q251 818 406.0 673.0Q561 528 797 528Q895 528 987.5 563.5Q1080 599 1167 670Z"/></svg>"#;
+const STERLING_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1102 588V770Q1026 729 958.0 708.5Q890 688 829 688Q681 688 623.0 765.5Q565 843 565 1055V1270H956V1413H565V1878H1122V2048H129V1878H365V1413H166V1270H365V1032Q365 771 472.0 649.5Q579 528 811 528Q872 528 947.5 543.5Q1023 559 1102 588Z"/></svg>"#;
+const YEN_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1165 1593H752V2048H551V1593H135V1470H551V1419L467 1264H135V1141H399L82 555H272L651 1255L1028 555H1219L901 1141H1165V1264H834L750 1419V1470H1165Z"/></svg>"#;
+const CENT_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M678 1917V1061Q531 1079 449.0 1192.0Q367 1305 367 1489Q367 1674 449.0 1787.0Q531 1900 678 1917ZM1059 971V1143Q985 1102 917.0 1081.0Q849 1060 781 1057L780 1921Q850 1916 918.5 1895.0Q987 1874 1059 1835V2005Q994 2035 925.5 2052.5Q857 2070 780 2077V2361H678V2073Q437 2053 304.5 1899.5Q172 1746 172 1489Q172 1231 304.5 1078.0Q437 925 678 903V616H780L781 903Q854 907 922.5 923.5Q991 940 1059 971Z"/></svg>"#;
+const RUPEE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M106 678 161 555H1199L1144 678H790Q869 756 890 885H1199L1144 1008H898Q893 1134 832 1219Q767 1312 642 1348Q707 1370 768 1442Q827 1510 892 1640L1097 2048H880L689 1665Q614 1514 546 1466Q476 1417 356 1417H136V1251H390Q536 1251 610 1184Q678 1122 684 1008H106L161 885H673Q655 818 610 766Q536 678 390 678Z"/></svg>"#;
+const SECTION_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M379 1112Q316 1158 285.0 1203.0Q254 1248 254 1294Q254 1370 323.5 1436.5Q393 1503 643 1638Q706 1593 737.0 1547.5Q768 1502 768 1456Q768 1381 696.5 1313.0Q625 1245 379 1112ZM829 586V750Q746 711 674.5 691.5Q603 672 547 672Q450 672 396.0 712.0Q342 752 342 823Q342 913 548 1028Q574 1043 588 1051Q799 1170 864.5 1247.0Q930 1324 930 1425Q930 1515 884.0 1585.0Q838 1655 745 1708Q807 1760 835.5 1814.5Q864 1869 864 1933Q864 2075 762.0 2159.0Q660 2243 487 2243Q414 2243 337.0 2228.5Q260 2214 172 2185V2021Q259 2060 333.0 2079.5Q407 2099 465 2099Q567 2099 623.5 2057.0Q680 2015 680 1939Q680 1837 459 1714L434 1700Q220 1580 156.0 1503.5Q92 1427 92 1325Q92 1234 138.5 1162.5Q185 1091 276 1042Q217 998 187.5 942.0Q158 886 158 817Q158 687 258.0 607.5Q358 528 524 528Q597 528 673.5 542.5Q750 557 829 586Z"/></svg>"#;
+const PLUSMINUS_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M942 764V1151H1499V1321H942V1708H774V1321H217V1151H774V764ZM217 1878H1499V2048H217Z"/></svg>"#;
+const MULTIPLY_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1436 948 979 1407 1436 1864 1317 1985 858 1526 399 1985 281 1864 737 1407 281 948 399 827 858 1286 1317 827Z"/></svg>"#;
+const DIVIDE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M735 913H981V1159H735ZM735 1653H981V1898H735ZM217 1321H1499V1491H217Z"/></svg>"#;
+const NOTEQUAL_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M217 1118H989L1245 803L1370 905L1196 1118H1499V1286H1059L864 1526H1499V1696H725L467 2009L342 1907L516 1696H217V1526H655L850 1286H217Z"/></svg>"#;
+const DEGREE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M512 657Q432 657 377.0 712.5Q322 768 322 848Q322 927 377.0 981.5Q432 1036 512 1036Q592 1036 647.0 981.5Q702 927 702 848Q702 769 646.5 713.0Q591 657 512 657ZM512 528Q576 528 635.0 552.5Q694 577 737 623Q783 668 806.0 725.0Q829 782 829 848Q829 980 736.5 1071.5Q644 1163 510 1163Q375 1163 285.0 1073.0Q195 983 195 848Q195 714 287.0 621.0Q379 528 512 528Z"/></svg>"#;
+const BULLET_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M307 1286Q307 1162 393.5 1076.5Q480 991 606 991Q730 991 815.5 1076.5Q901 1162 901 1286Q901 1411 815.0 1497.0Q729 1583 604 1583Q479 1583 393.0 1497.0Q307 1411 307 1286Z"/></svg>"#;
+const COPYRIGHT_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1024 563Q1176 563 1307.5 618.0Q1439 673 1548 782Q1657 891 1711.0 1022.0Q1765 1153 1765 1307Q1765 1459 1711.0 1589.5Q1657 1720 1548 1829Q1439 1938 1307.5 1993.0Q1176 2048 1024 2048Q872 2048 740.5 1993.0Q609 1938 500 1829Q391 1720 337.0 1589.5Q283 1459 283 1307Q283 1153 337.0 1022.0Q391 891 500 782Q609 673 740.5 618.0Q872 563 1024 563ZM1024 666Q893 666 780.0 713.0Q667 760 573 854Q479 948 431.0 1062.5Q383 1177 383 1307Q383 1436 431.0 1549.5Q479 1663 573 1757Q667 1851 780.0 1898.5Q893 1946 1024 1946Q1156 1946 1269.5 1898.5Q1383 1851 1477 1757Q1570 1664 1616.5 1551.0Q1663 1438 1663 1307Q1663 1174 1616.0 1060.5Q1569 947 1477 854Q1383 760 1269.5 713.0Q1156 666 1024 666ZM1323 911V1040Q1257 1007 1192.0 991.0Q1127 975 1061 975Q912 975 828.5 1062.5Q745 1150 745 1307Q745 1466 830.5 1553.0Q916 1640 1071 1640Q1135 1640 1196.0 1624.5Q1257 1609 1323 1575V1702Q1256 1731 1187.5 1745.0Q1119 1759 1049 1759Q833 1759 707.5 1637.0Q582 1515 582 1307Q582 1098 707.5 977.0Q833 856 1049 856Q1122 856 1190.0 870.0Q1258 884 1323 911Z"/></svg>"#;
+const REGISTERED_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1024 666Q893 666 780.0 713.0Q667 760 573 854Q479 948 431.0 1062.5Q383 1177 383 1307Q383 1436 431.0 1549.5Q479 1663 573 1757Q667 1851 780.0 1898.5Q893 1946 1024 1946Q1156 1946 1269.5 1898.5Q1383 1851 1477 1757Q1570 1664 1616.5 1551.0Q1663 1438 1663 1307Q1663 1174 1616.0 1060.5Q1569 947 1477 854Q1383 760 1269.5 713.0Q1156 666 1024 666ZM1024 563Q1176 563 1307.5 618.0Q1439 673 1548 782Q1657 891 1711.0 1022.0Q1765 1153 1765 1307Q1765 1459 1711.0 1589.5Q1657 1720 1548 1829Q1439 1938 1307.5 1993.0Q1176 2048 1024 2048Q872 2048 740.5 1993.0Q609 1938 500 1829Q391 1720 337.0 1589.5Q283 1459 283 1307Q283 1153 337.0 1022.0Q391 891 500 782Q609 673 740.5 618.0Q872 563 1024 563ZM997 977H874V1253H997Q1107 1253 1150.5 1222.0Q1194 1191 1194 1116Q1194 1040 1150.0 1008.5Q1106 977 997 977ZM1004 874Q1180 874 1267.0 933.5Q1354 993 1354 1114Q1354 1200 1301.5 1256.0Q1249 1312 1153 1329Q1177 1337 1210.5 1375.5Q1244 1414 1290 1487L1427 1710H1255L1126 1501Q1067 1405 1030.5 1379.5Q994 1354 940 1354H874V1710H719V874Z"/></svg>"#;
+const TRADEMARK_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1098 555 1272 811 1436 555H1606V1133H1493V649L1298 952H1243L1040 649V1133H926V555ZM813 555V649H610V1133H496V649H295V555Z"/></svg>"#;
+const GUILLEMOTLEFT_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M1061 989V1180L760 1448L1061 1716V1907L592 1489V1407ZM627 989V1180L326 1448L627 1716V1907L158 1489V1407Z"/></svg>"#;
+const GUILLEMOTRIGHT_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M193 989 662 1407V1489L193 1907V1716L494 1448L193 1180ZM627 989 1096 1407V1489L627 1907V1716L928 1448L627 1180Z"/></svg>"#;
+const QUESTIONDOWN_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="{COLOR}" d="M500 1329H690V1485Q690 1586 662.5 1651.0Q635 1716 545 1803L455 1891Q397 1944 371.5 1991.0Q346 2038 346 2087Q346 2176 411.5 2231.0Q477 2286 586 2286Q664 2286 754.0 2251.0Q844 2216 940 2149V2337Q846 2394 750.0 2422.0Q654 2450 551 2450Q367 2450 255.0 2353.0Q143 2256 143 2097Q143 2021 179.5 1952.5Q216 1884 305 1798L393 1712Q441 1665 460.0 1638.5Q479 1612 487 1587Q494 1566 497.0 1536.0Q500 1506 500 1452ZM696 1182H494V928H696Z"/></svg>"#;
+const PIN_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>"#;
 
 fn svg(template: &str, color: &str) -> slint::Image {
     slint::Image::load_from_svg_data(template.replace("{COLOR}", color).as_bytes()).unwrap()
@@ -124,6 +164,26 @@ impl SlintScene {
         ui.set_icon_palette(svg(PALETTE_SVG, "#fff"));
         ui.set_icon_dismiss(svg(DISMISS_SVG, "#fff"));
         ui.set_icon_clipboard(svg(CLIPBOARD_SVG, "#fff"));
+        ui.set_icon_grave(svg(GRAVE_SVG, "#fff"));
+        ui.set_icon_euro(svg(EURO_SVG, "#fff"));
+        ui.set_icon_sterling(svg(STERLING_SVG, "#fff"));
+        ui.set_icon_yen(svg(YEN_SVG, "#fff"));
+        ui.set_icon_cent(svg(CENT_SVG, "#fff"));
+        ui.set_icon_rupee(svg(RUPEE_SVG, "#fff"));
+        ui.set_icon_section(svg(SECTION_SVG, "#fff"));
+        ui.set_icon_plusminus(svg(PLUSMINUS_SVG, "#fff"));
+        ui.set_icon_multiply(svg(MULTIPLY_SVG, "#fff"));
+        ui.set_icon_divide(svg(DIVIDE_SVG, "#fff"));
+        ui.set_icon_notequal(svg(NOTEQUAL_SVG, "#fff"));
+        ui.set_icon_degree(svg(DEGREE_SVG, "#fff"));
+        ui.set_icon_bullet(svg(BULLET_SVG, "#fff"));
+        ui.set_icon_copyright(svg(COPYRIGHT_SVG, "#fff"));
+        ui.set_icon_registered(svg(REGISTERED_SVG, "#fff"));
+        ui.set_icon_trademark(svg(TRADEMARK_SVG, "#fff"));
+        ui.set_icon_guillemotleft(svg(GUILLEMOTLEFT_SVG, "#fff"));
+        ui.set_icon_guillemotright(svg(GUILLEMOTRIGHT_SVG, "#fff"));
+        ui.set_icon_questiondown(svg(QUESTIONDOWN_SVG, "#fff"));
+        ui.set_icon_pin(svg(PIN_SVG, "#89b4fa"));
 
         ui.show()?;
         ui.window().dispatch_event(WindowEvent::Resized {
@@ -155,6 +215,28 @@ impl SlintScene {
             KeyAction::None if label == "🎤" => icon::MIC,
             KeyAction::None if label == "gear" => icon::GEAR,
             KeyAction::None if label == "palette" => icon::PALETTE,
+            KeyAction::Text(t) => match t.as_str() {
+                "`" => icon::GRAVE,
+                "€" => icon::EURO,
+                "£" => icon::STERLING,
+                "¥" => icon::YEN,
+                "¢" => icon::CENT,
+                "₹" => icon::RUPEE,
+                "§" => icon::SECTION,
+                "±" => icon::PLUSMINUS,
+                "×" => icon::MULTIPLY,
+                "÷" => icon::DIVIDE,
+                "≠" => icon::NOTEQUAL,
+                "°" => icon::DEGREE,
+                "•" => icon::BULLET,
+                "©" => icon::COPYRIGHT,
+                "®" => icon::REGISTERED,
+                "™" => icon::TRADEMARK,
+                "«" => icon::GUILLEMOTLEFT,
+                "»" => icon::GUILLEMOTRIGHT,
+                "¿" => icon::QUESTIONDOWN,
+                _ => 0,
+            },
             _ => 0,
         }
     }
@@ -207,16 +289,20 @@ impl SlintScene {
                     is_suggestion: key.is_suggestion,
                     is_functional: key.is_special,
                     is_space: matches!(key.action, KeyAction::Space),
+                    is_clipboard: key.is_clipboard,
+                    is_pinned: key.is_pinned,
                 });
                 flat += 1;
             }
         }
+        let show_clipboard = keys.iter().any(|k| k.is_clipboard);
 
         // Let animations/timers tick before rendering the frame.
         slint::platform::update_timers_and_animations();
 
         self.ui.set_keys(ModelRc::new(VecModel::from(keys)));
         self.ui.set_pressed_index(pressed_index);
+        self.ui.set_show_clipboard(show_clipboard);
         if width != self.width || height != self.height {
             self.width = width;
             self.height = height;

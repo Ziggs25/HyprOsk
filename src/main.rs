@@ -33,6 +33,8 @@ enum Commands {
     Layer {
         name: String,
     },
+    /// Toggle clipboard history view
+    Clipboard,
     /// Print folio/keyboard detection diagnostics for debugging
     Status,
     /// Stop the running HyprOsk daemon
@@ -69,6 +71,10 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Layer { name }) => {
             let resp = hyprosk::ipc::IpcServer::send_command(&format!("layer {}", name))?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Clipboard) => {
+            let resp = hyprosk::ipc::IpcServer::send_command("clipboard")?;
             println!("{}", resp.trim());
         }
         Some(Commands::Status) => {
