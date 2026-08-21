@@ -629,7 +629,7 @@ impl WaylandState {
                     let popup_w = rect.w * 1.22;
                     let popup_h = rect.h * 1.45;
                     let mut popup_x = rect.x + rect.w / 2.0 - popup_w / 2.0;
-                    let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 34.0;
+                    let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 72.0;
                     popup_y = popup_y.clamp(8.0, self.height as f32 - popup_h - 8.0);
                     popup_x = popup_x.clamp(8.0, self.width as f32 - popup_w - 8.0);
                     self.hold_preview = Some(HoldPreview {
