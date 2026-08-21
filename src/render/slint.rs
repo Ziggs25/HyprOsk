@@ -18,6 +18,7 @@ use slint::{LogicalSize, ModelRc, PhysicalSize, VecModel, Window};
 use crate::layout::KeyboardLayout;
 use crate::layout::key::KeyAction;
 use crate::render::engine::RenderEngine;
+use crate::wayland::state::HoldPreview;
 
 slint::include_modules!();
 
@@ -254,6 +255,7 @@ impl SlintScene {
         height: u32,
         pressed_key: Option<(usize, usize)>,
         _swipe_offset: Option<f32>,
+        hold_preview: Option<HoldPreview>,
         out_shm: &mut [u8],
     ) -> bool {
         // Re-create the rect geometry from the Rust layout (single source of truth).
@@ -303,6 +305,16 @@ impl SlintScene {
         self.ui.set_keys(ModelRc::new(VecModel::from(keys)));
         self.ui.set_pressed_index(pressed_index);
         self.ui.set_show_clipboard(show_clipboard);
+        if let Some(preview) = hold_preview {
+            self.ui.set_hold_preview_visible(true);
+            self.ui.set_hold_preview_label(preview.label.into());
+            self.ui.set_hold_preview_x(preview.x);
+            self.ui.set_hold_preview_y(preview.y);
+            self.ui.set_hold_preview_w(preview.w);
+            self.ui.set_hold_preview_h(preview.h);
+        } else {
+            self.ui.set_hold_preview_visible(false);
+        }
         if width != self.width || height != self.height {
             self.width = width;
             self.height = height;

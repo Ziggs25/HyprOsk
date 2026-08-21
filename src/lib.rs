@@ -150,6 +150,9 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
             state.on_folio_change(attached, &qh);
         }
 
+        // Update hold-preview for long-press secondary visualization (Gboard/HeliBoard style)
+        state.update_hold_preview(&qh);
+
         // Flush and wait for next event
         conn.flush()?;
         if let Some(guard) = event_queue.prepare_read() {

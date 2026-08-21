@@ -154,6 +154,12 @@ export component OskUi inherits Window {
     in property <[Key]> keys;
     in property <int> pressed-index: -1;
     in property <bool> show-clipboard: false;
+    in property <bool> hold-preview-visible: false;
+    in property <string> hold-preview-label: "";
+    in property <length> hold-preview-x;
+    in property <length> hold-preview-y;
+    in property <length> hold-preview-w;
+    in property <length> hold-preview-h;
 
     in property <length> key-gap: 8px;
     in property <length> key-radius: 16px;
@@ -267,5 +273,33 @@ export component OskUi inherits Window {
                 : k.icon == 32 ? root.icon-questiondown
                 : root.icon-pin;
         icon-pin: root.icon-pin;
+    }
+
+    Rectangle {
+        visible: root.hold-preview-visible;
+        x: root.hold-preview-x;
+        y: root.hold-preview-y;
+        width: root.hold-preview-w;
+        height: root.hold-preview-h;
+        background: #2d2d2d;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #444444;
+        Text {
+            x: 0; y: 0; width: parent.width; height: parent.height;
+            text: root.hold-preview-label;
+            font-size: 34px;
+            font-weight: 600;
+            color: #ffffff;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            x: (parent.width - 12px) / 2;
+            y: parent.height - 1px;
+            width: 12px;
+            height: 6px;
+            background: #2d2d2d;
+        }
     }
 }

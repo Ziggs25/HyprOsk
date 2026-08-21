@@ -127,6 +127,16 @@ pub struct WaylandState {
 
     // Hold-to-type secondary (sub) characters: press time for the current key.
     pub press_instant: Option<Instant>,
+    pub hold_preview: Option<HoldPreview>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HoldPreview {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub label: String,
 }
 
 impl WaylandState {
@@ -186,6 +196,7 @@ impl WaylandState {
             clipboard_mode: false,
             clipboard_history: VecDeque::new(),
             press_instant: None,
+            hold_preview: None,
         }
     }
 
@@ -396,6 +407,7 @@ impl WaylandState {
                     height,
                     self.pressed_key,
                     self.swipe_offset,
+                    self.hold_preview.clone(),
                     canvas,
                 ) {
                     tracing::trace!("Painted frame via Slint scene ({}x{})", width, height);
@@ -591,10 +603,51 @@ impl WaylandState {
 
         self.pressed_key = None;
         self.press_instant = None;
+        self.hold_preview = None;
         self.space_touch_start = None;
         self.is_space_swiping = false;
         self.swipe_offset = None;
         self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn update_hold_preview(&mut self, qh: &QueueHandle<Self>) {
+        if let Some((r_idx, k_idx)) = self.pressed_key
+            && let Some(row) = self.layout.rows.get(r_idx)
+            && let Some(key) = row.keys.get(k_idx)
+            && let Some(sec) = &key.secondary_label
+            && let Some(instant) = self.press_instant
+            && instant.elapsed().as_millis() > 400
+        {
+            if self.hold_preview.is_none() {
+                let rects = RenderEngine::calculate_key_rects(
+                    &self.layout,
+                    self.width,
+                    self.height,
+                    &self.theme,
+                );
+                if let Some((rect, _)) = rects.get(r_idx).and_then(|r| r.get(k_idx)) {
+                    let popup_w = rect.w * 1.22;
+                    let popup_h = rect.h * 1.45;
+                    let mut popup_x = rect.x + rect.w / 2.0 - popup_w / 2.0;
+                    let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 22.0;
+                    popup_y = popup_y.clamp(8.0, self.height as f32 - popup_h - 8.0);
+                    popup_x = popup_x.clamp(8.0, self.width as f32 - popup_w - 8.0);
+                    self.hold_preview = Some(HoldPreview {
+                        x: popup_x,
+                        y: popup_y,
+                        w: popup_w,
+                        h: popup_h,
+                        label: sec.clone(),
+                    });
+                    self.redraw(qh);
+                }
+            }
+            return;
+        }
+        if self.hold_preview.is_some() {
+            self.hold_preview = None;
+            self.redraw(qh);
+        }
     }
 
     pub fn handle_motion(&mut self, x: f64, _y: f64, qh: &QueueHandle<Self>) {
@@ -874,6 +927,7 @@ impl TouchHandler for WaylandState {
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
         self.pressed_key = None;
         self.press_instant = None;
+        self.hold_preview = None;
         self.space_touch_start = None;
         self.is_space_swiping = false;
         self.swipe_offset = None;

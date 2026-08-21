@@ -32,7 +32,7 @@ fn main() {
 
     let mut scene = SlintScene::new(W, H).expect("SlintScene::new");
     let mut argb = vec![0u8; (W * H * 4) as usize];
-    let ok = scene.render(&layout, &theme, W, H, Some((2, 0)), None, argb.as_mut());
+    let ok = scene.render(&layout, &theme, W, H, Some((2, 0)), None, None, argb.as_mut());
     println!("render ok: {ok}");
     assert!(ok);
 
