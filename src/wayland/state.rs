@@ -574,7 +574,7 @@ impl WaylandState {
             && let Some(sec) = &key.secondary_label
         {
             let elapsed = self.press_instant.map(|t| t.elapsed()).unwrap_or_default();
-            let hold = elapsed.as_millis() > 400;
+            let hold = elapsed.as_millis() > 300;
             Some(if hold { sec.clone() } else { text.clone() })
         } else {
             None
@@ -616,7 +616,7 @@ impl WaylandState {
             && let Some(key) = row.keys.get(k_idx)
             && let Some(sec) = &key.secondary_label
             && let Some(instant) = self.press_instant
-            && instant.elapsed().as_millis() > 400
+            && instant.elapsed().as_millis() > 300
         {
             if self.hold_preview.is_none() {
                 let rects = RenderEngine::calculate_key_rects(
@@ -629,7 +629,7 @@ impl WaylandState {
                     let popup_w = rect.w * 1.22;
                     let popup_h = rect.h * 1.45;
                     let mut popup_x = rect.x + rect.w / 2.0 - popup_w / 2.0;
-                    let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 22.0;
+                    let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 34.0;
                     popup_y = popup_y.clamp(8.0, self.height as f32 - popup_h - 8.0);
                     popup_x = popup_x.clamp(8.0, self.width as f32 - popup_w - 8.0);
                     self.hold_preview = Some(HoldPreview {
