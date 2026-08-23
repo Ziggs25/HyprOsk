@@ -253,7 +253,8 @@ impl SlintScene {
         theme: &crate::render::theme::Theme,
         width: u32,
         height: u32,
-        pressed_key: Option<(usize, usize)>,
+        pressed_keys: &[(usize, usize)],
+        latched_keys: &[(usize, usize)],
         _swipe_offset: Option<f32>,
         hold_preview: Option<HoldPreview>,
         out_shm: &mut [u8],
@@ -271,7 +272,8 @@ impl SlintScene {
                     continue;
                 };
                 let icon = Self::icon_for(&key.action, &key.label);
-                if pressed_key == Some((r_idx, k_idx)) {
+                let is_active = pressed_keys.contains(&(r_idx, k_idx)) || latched_keys.contains(&(r_idx, k_idx));
+                if is_active && pressed_index == -1 {
                     pressed_index = flat;
                 }
                 keys.push(Key {
@@ -287,7 +289,7 @@ impl SlintScene {
                     .into(),
                     sub: key.secondary_label.clone().unwrap_or_default().into(),
                     icon,
-                    is_pressed: pressed_index == flat,
+                    is_pressed: is_active,
                     is_suggestion: key.is_suggestion,
                     is_functional: key.is_special,
                     is_space: matches!(key.action, KeyAction::Space),

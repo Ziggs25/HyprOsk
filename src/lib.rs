@@ -5,6 +5,7 @@ pub mod ipc;
 pub mod layout;
 pub mod render;
 pub mod suggest;
+pub mod touch;
 pub mod wayland;
 
 use anyhow::{Context, Result};
@@ -90,6 +91,7 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
     let (ipc_tx, ipc_rx) = mpsc::channel();
     let (hypr_tx, hypr_rx) = mpsc::channel();
     let (folio_tx, folio_rx) = mpsc::channel();
+    let (touch_tx, touch_rx) = mpsc::channel();
 
     IpcServer::start_server(ipc_tx);
     HyprlandIpcListener::start_listener(hypr_tx);
@@ -100,6 +102,10 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
             "Folio mode enabled: auto-show suppressed while a physical keyboard is attached (current: {})",
             state.folio_attached
         );
+    }
+    if config.behavior.touch_only {
+        crate::touch::spawn_touch_poller(touch_tx);
+        tracing::info!("touch_only enabled: auto-show only on recent touch input");
     }
 
     tracing::info!("HyprOsk daemon successfully initialized and running.");
@@ -141,13 +147,21 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                 HyprlandEvent::ActiveWindow { class, title } => {
                     tracing::debug!("Active window changed: {} ({})", class, title);
                 }
-                HyprlandEvent::WorkspaceChanged(_) => {}
+                HyprlandEvent::WorkspaceChanged(_) => {
+                    state.note_workspace_switch();
+                    if state.is_visible && !state.manually_shown {
+                        state.hide_keyboard(&qh);
+                    }
+                }
             }
         }
 
         // Check folio attach/detach changes
         while let Ok(attached) = folio_rx.try_recv() {
             state.on_folio_change(attached, &qh);
+        }
+        while let Ok(at) = touch_rx.try_recv() {
+            state.note_touch(at);
         }
 
         // Update hold-preview for long-press secondary visualization (Gboard/HeliBoard style)

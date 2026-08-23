@@ -99,7 +99,8 @@ impl RenderEngine {
         height: u32,
         layout: &KeyboardLayout,
         theme: &Theme,
-        pressed_key: Option<(usize, usize)>,
+        pressed_keys: &[(usize, usize)],
+        latched_keys: &[(usize, usize)],
         swipe_offset: Option<f32>,
     ) {
         let bg_u32 = theme.background.to_argb_u32();
@@ -124,8 +125,10 @@ impl RenderEngine {
                     None => continue,
                 };
 
-                let is_pressed = pressed_key == Some((r_idx, *k_idx));
-                let key_bg = if is_pressed {
+                let is_pressed = pressed_keys.contains(&(r_idx, *k_idx));
+                let is_latched = latched_keys.contains(&(r_idx, *k_idx));
+                let is_active = is_pressed || is_latched;
+                let key_bg = if is_active {
                     theme.key_pressed
                 } else if is_suggestion_bar {
                     if key.is_special {
@@ -140,7 +143,7 @@ impl RenderEngine {
                     theme.key_background
                 };
 
-                let text_col = if is_pressed {
+                let text_col = if is_active {
                     Color::rgb(255, 255, 255)
                 } else if is_suggestion_bar && key.is_special {
                     theme.accent_color

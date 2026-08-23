@@ -18,7 +18,7 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
     delegate_seat, delegate_shm, delegate_touch, registry_handlers,
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::os::fd::AsFd;
 use std::process::Command;
 use std::time::Instant;
@@ -96,6 +96,11 @@ pub struct WaylandState {
     /// True while a physical (folio) keyboard is attached. Gates auto-show in
     /// folio mode; manual show/toggle is unaffected.
     pub folio_attached: bool,
+    /// Last input was via touch screen. Used for `touch_only` gating.
+    pub last_input_is_touch: bool,
+    pub last_input_at: Option<Instant>,
+    pub last_touch_at: Option<Instant>,
+    pub last_workspace_switch_at: Option<Instant>,
 
     // Reusable SHM buffers (ring of IN_FLIGHT_BUFFERS slots). Buffers are
     // reused across frames once the compositor releases them; the pool never
@@ -111,9 +116,13 @@ pub struct WaylandState {
     pub config: Config,
     pub suggest_engine: SuggestEngine,
     pub pressed_key: Option<(usize, usize)>,
+    pub pressed_keys: Vec<(usize, usize)>,
+    pub active_touches: HashMap<i32, (usize, usize)>,
     /// Slint headless paint scene (lazily initialized on first redraw).
     pub slint_scene: Option<SlintScene>,
 
+    // One-shot modifiers for Hyprland Super / Ctrl / Alt (Maliit-style latch)
+    pub pending_mods: u32,
     // Spacebar Glide / Swipe Cursor Navigation
     pub space_touch_start: Option<(f64, f64)>,
     pub space_last_x: f64,
@@ -179,6 +188,11 @@ impl WaylandState {
             width: 1000,
             height,
             folio_attached: crate::folio::physical_keyboard_attached(),
+            last_input_is_touch: false,
+            last_input_at: None,
+            last_touch_at: None,
+            last_workspace_switch_at: None,
+            pending_mods: 0,
             canvas_buffers: Vec::new(),
             canvas_size: (0, 0),
             im_state: InputMethodState::default(),
@@ -188,6 +202,8 @@ impl WaylandState {
             config,
             suggest_engine,
             pressed_key: None,
+            pressed_keys: Vec::new(),
+            active_touches: HashMap::new(),
             slint_scene: None,
             space_touch_start: None,
             space_last_x: 0.0,
@@ -255,17 +271,102 @@ impl WaylandState {
         }
     }
 
+    pub fn note_input(&mut self, is_touch: bool) {
+        self.last_input_is_touch = is_touch;
+        self.last_input_at = Some(Instant::now());
+        if is_touch {
+            self.last_touch_at = Some(Instant::now());
+        }
+    }
+
+    pub fn note_touch(&mut self, at: Instant) {
+        self.last_input_is_touch = true;
+        self.last_input_at = Some(at);
+        self.last_touch_at = Some(at);
+    }
+
+    pub fn note_workspace_switch(&mut self) {
+        self.last_workspace_switch_at = Some(Instant::now());
+    }
+
     /// Whether automatic activation (text-field focus) may show the keyboard.
     ///
     /// In folio mode this is denied while a physical keyboard is attached;
-    /// manual shows via `hyprosk show` / `toggle` are not affected.
+    /// in touch_only mode only touch triggers are allowed.
+    /// Manual shows via `hyprosk show` / `toggle` are not affected.
     pub fn allow_auto_show(&self) -> bool {
+        if let Some(ws_at) = self.last_workspace_switch_at
+            && ws_at.elapsed().as_millis() < 900
+        {
+            tracing::debug!("suppressing auto-show: workspace switch <900ms ago (ghostty fix)");
+            return false;
+        }
         if self.config.behavior.folio_mode && self.folio_attached {
             tracing::debug!("Folio keyboard attached, suppressing auto-show");
-            false
-        } else {
-            true
+            return false;
         }
+        if self.config.behavior.touch_only {
+            let recent_touch = self
+                .last_touch_at
+                .or(self.last_input_at.filter(|_| self.last_input_is_touch))
+                .is_some_and(|at| at.elapsed().as_millis() < 1500);
+            if !recent_touch {
+                tracing::debug!("touch_only enabled, suppressing auto-show (no recent touch)");
+                return false;
+            }
+        }
+        true
+    }
+
+    const MOD_SHIFT: u32 = 1;
+    const MOD_CTRL: u32 = 4;
+    const MOD_ALT: u32 = 8;
+    const MOD_SUPER: u32 = 64;
+
+    fn sync_mods(&self) {
+        if let Some(ref vk) = self.virtual_keyboard {
+            vk.modifiers(self.pending_mods, 0, 0, 0);
+        }
+    }
+
+    fn toggle_mod(&mut self, mask: u32, qh: &QueueHandle<Self>) {
+        if self.pending_mods & mask != 0 {
+            self.pending_mods &= !mask;
+        } else {
+            self.pending_mods |= mask;
+        }
+        self.sync_mods();
+        tracing::info!("pending mods now {:b}", self.pending_mods);
+        self.redraw(qh);
+    }
+
+    fn consume_mods(&mut self) {
+        if self.pending_mods != 0 {
+            self.pending_mods = 0;
+            self.sync_mods();
+        }
+    }
+
+    fn latched_positions(&self) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        if self.pending_mods == 0 {
+            return out;
+        }
+        for (r_idx, row) in self.layout.rows.iter().enumerate() {
+            for (k_idx, key) in row.keys.iter().enumerate() {
+                let mask = match key.action {
+                    KeyAction::Shift => Self::MOD_SHIFT,
+                    KeyAction::Ctrl => Self::MOD_CTRL,
+                    KeyAction::Alt => Self::MOD_ALT,
+                    KeyAction::Win => Self::MOD_SUPER,
+                    _ => 0,
+                };
+                if mask != 0 && (self.pending_mods & mask) != 0 {
+                    out.push((r_idx, k_idx));
+                }
+            }
+        }
+        out
     }
 
     /// React to a folio attach/detach poll result.
@@ -373,6 +474,7 @@ impl WaylandState {
             self.canvas_size = (width, height);
         }
 
+        let latched_keys = self.latched_positions();
         // Draw into the first buffer whose slot is free (i.e. released by the
         // compositor). If all are still in flight, skip this frame — the
         // previously committed buffer remains displayed.
@@ -387,7 +489,8 @@ impl WaylandState {
                 height,
                 &self.layout,
                 &self.theme,
-                self.pressed_key,
+                &self.pressed_keys,
+                &latched_keys,
                 self.swipe_offset,
             );
             // Paint swap: render the Wireframe scene through Slint when available.
@@ -405,7 +508,8 @@ impl WaylandState {
                     &self.theme,
                     width,
                     height,
-                    self.pressed_key,
+                    &self.pressed_keys,
+                    &latched_keys,
                     self.swipe_offset,
                     self.hold_preview.clone(),
                     canvas,
@@ -419,7 +523,8 @@ impl WaylandState {
                         height,
                         &self.layout,
                         &self.theme,
-                        self.pressed_key,
+                        &self.pressed_keys,
+                        &latched_keys,
                         self.swipe_offset,
                     );
                 }
@@ -450,6 +555,9 @@ impl WaylandState {
 
         tracing::debug!("Key pressed: {:?}", action);
         self.pressed_key = Some((r_idx, k_idx));
+        if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+            self.pressed_keys.push((r_idx, k_idx));
+        }
         self.press_instant = Some(Instant::now());
 
         if matches!(action, KeyAction::Text(_)) && secondary.is_some() {
@@ -502,6 +610,13 @@ impl WaylandState {
                     LayerId::Lower
                 };
                 self.current_layer = next;
+                if self.pending_mods & Self::MOD_SHIFT != 0 {
+                    self.pending_mods &= !Self::MOD_SHIFT;
+                } else {
+                    self.pending_mods |= Self::MOD_SHIFT;
+                }
+                self.sync_mods();
+                tracing::info!("shift hold pending {:b}", self.pending_mods);
             }
             KeyAction::SwitchLayer(layer) => {
                 self.current_layer = layer;
@@ -544,13 +659,16 @@ impl WaylandState {
                 }
             }
             KeyAction::Ctrl => {
-                self.send_keycode(KEY_LEFTCTRL);
+                self.toggle_mod(Self::MOD_CTRL, qh);
+                return;
             }
             KeyAction::Alt => {
-                self.send_keycode(KEY_LEFTALT);
+                self.toggle_mod(Self::MOD_ALT, qh);
+                return;
             }
             KeyAction::Win => {
-                self.send_keycode(KEY_LEFTMETA);
+                self.toggle_mod(Self::MOD_SUPER, qh);
+                return;
             }
             KeyAction::Home => {
                 self.send_keycode(KEY_HOME);
@@ -601,12 +719,15 @@ impl WaylandState {
             self.send_space();
         }
 
-        self.pressed_key = None;
-        self.press_instant = None;
-        self.hold_preview = None;
-        self.space_touch_start = None;
-        self.is_space_swiping = false;
-        self.swipe_offset = None;
+        self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+        self.pressed_key = self.pressed_keys.last().copied();
+        if self.pressed_keys.is_empty() {
+            self.press_instant = None;
+            self.hold_preview = None;
+            self.space_touch_start = None;
+            self.is_space_swiping = false;
+            self.swipe_offset = None;
+        }
         self.sync_layout_and_redraw(qh);
     }
 
@@ -671,8 +792,9 @@ impl WaylandState {
     }
 
     pub fn send_text(&mut self, text: &str) {
+        let has_mods = self.pending_mods != 0;
         let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
-        if is_im_active
+        if is_im_active && !has_mods
             && let Some(ref im) = self.input_method
         {
             im.commit_string(text.to_string());
@@ -742,13 +864,21 @@ impl WaylandState {
             .map_or(0, |d| d.as_millis() as u32);
 
         if let Some(ref vk) = self.virtual_keyboard {
-            if shift {
-                vk.modifiers(1, 0, 0, 0); // Shift depressed
+            let pending = self.pending_mods;
+            let depressed = pending | if shift { Self::MOD_SHIFT } else { 0 };
+            if depressed != 0 {
+                vk.modifiers(depressed, 0, 0, 0);
             }
             vk.key(time, keycode, wl_keyboard::KeyState::Pressed.into());
             vk.key(time, keycode, wl_keyboard::KeyState::Released.into());
-            if shift {
-                vk.modifiers(0, 0, 0, 0); // Reset modifiers
+            if depressed != 0 {
+                if pending != 0 {
+                    self.pending_mods = 0;
+                }
+                vk.modifiers(0, 0, 0, 0);
+                if pending != 0 {
+                    tracing::info!("consumed one-shot mods {:b}", pending);
+                }
             }
         } else {
             tracing::warn!("No virtual keyboard bound; dropping keycode {keycode}");
@@ -851,6 +981,7 @@ impl PointerHandler for WaylandState {
                     self.handle_motion(x, y, qh);
                 }
                 PointerEventKind::Press { .. } => {
+                    self.note_input(false);
                     let (x, y) = event.position;
                     let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
                     if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
@@ -885,15 +1016,21 @@ impl TouchHandler for WaylandState {
         _id: i32,
         position: (f64, f64),
     ) {
+        self.note_input(true);
         let (x, y) = position;
+        tracing::info!("touch down id={} pos=({:.0},{:.0}) active={}", _id, x, y, self.active_touches.len()+1);
         let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
         if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
+            tracing::info!("  -> hit key {:?} at {}:{}", key.action, r_idx, k_idx);
             if matches!(key.action, KeyAction::Space) {
                 self.space_touch_start = Some((x, y));
                 self.space_last_x = x;
                 self.is_space_swiping = false;
             }
+            self.active_touches.insert(_id, (r_idx, k_idx));
             self.handle_key_press(r_idx, k_idx, qh);
+        } else {
+            tracing::info!("  -> miss (no key)");
         }
     }
 
@@ -906,7 +1043,10 @@ impl TouchHandler for WaylandState {
         _time: u32,
         _id: i32,
     ) {
-        if let Some((r_idx, k_idx)) = self.pressed_key {
+        tracing::info!("touch up id={} active_before={}", _id, self.active_touches.len());
+        if let Some((r_idx, k_idx)) = self.active_touches.remove(&_id) {
+            self.handle_key_release(r_idx, k_idx, qh);
+        } else if let Some((r_idx, k_idx)) = self.pressed_key {
             self.handle_key_release(r_idx, k_idx, qh);
         }
     }
@@ -926,6 +1066,8 @@ impl TouchHandler for WaylandState {
 
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
         self.pressed_key = None;
+        self.pressed_keys.clear();
+        self.active_touches.clear();
         self.press_instant = None;
         self.hold_preview = None;
         self.space_touch_start = None;
