@@ -1,134 +1,159 @@
-# HyprOsk 🚀
-> Fast, lightweight, native Wayland On-Screen Keyboard designed for Hyprland with automatic input-field detection.
+# HyprOsk
 
----
+Native Wayland on-screen keyboard for Hyprland. Written in Rust, runs as a layer-shell overlay and types via the Wayland virtual keyboard protocol.
 
-## 🌟 Overview
+It shows automatically when you focus a text field (GTK, Qt, Firefox, Chromium, Foot, etc.) and hides when focus is lost. No focus stealing — tapping keys does not move focus away from the app.
 
-**HyprOsk** is a blazing-fast, minimal on-screen keyboard engineered specifically for **Hyprland** and **wlroots** Wayland compositors in Rust.
+## What it does
 
-### Key Highlights
-- **⚡ Instant Startup & Nano Footprint:** Written in modern Rust with zero heavy web/Qt runtimes (~6–10 MB RAM RSS, < 5ms startup).
-- **🎯 Automatic Input-Field Detection:** Automatically pops up when you tap into a text field in GTK, Qt, Firefox, Foot, or Chromium, and hides when focus is lost (powered by `zwp_input_method_v2` and `zwp_text_input_v3`).
-- **🛡️ Zero-Focus-Stealing Architecture:** Uses `zwlr_layer_shell_v1` with `keyboard_interactivity = 0` so tapping keys never breaks cursor focus in your active application.
-- **✨ Multiple Layers:** QWERTY Lowercase, Uppercase, Numbers, Extended Math & Symbols, Navigation/Edit Mode (Arrows, Copy, Paste, Tab, Esc), and Emoji panel.
-- **🎨 Built-in Aesthetic Themes:** Catppuccin Mocha, Tokyo Night, OLED Dark, with custom rounding, borders, margins, and transparency.
-- **🔌 Hyprland IPC & CLI Control:** Real-time IPC server for gestures, keybindings, and automatic hiding on fullscreen.
+- Auto show/hide on text input focus using `zwp_input_method_v2` + `zwp_text_input_v3`.
+- Layer-shell window anchored to bottom (`zwlr_layer_shell_v1`, `keyboard_interactivity = 0`), touch/pointer input, output via `commit_string` / virtual keyboard.
+- Layers: Lower, Upper (Shift), Symbols, Symbols2. Layout is Windows 11-style (Esc, Tab, Shift, Backspace, Ctrl/Alt/Super, arrows, Space, suggestion bar).
+- Suggestion bar + clipboard history.
+- Folio/tablet detection: can suppress auto-show when a physical keyboard is attached.
 
----
+## Requirements
 
-## 🏗️ Architecture & How Auto-Detection Works
+- Hyprland (or any wlroots compositor with `zwlr_layer_shell_v1` + `zwp_input_method_v2` + `zwp_virtual_keyboard_v1`)
+- Wayland session
+- For building from source: `cargo`, `pkg-config`, `wayland`, `wayland-protocols`, `libxkbcommon`, `wayland-scanner`
 
-HyprOsk implements the full Wayland Input Method lifecycle:
+## Installation
 
-```
-+-----------------------------------------------------------------------------------+
-|                           Target Application (e.g. GTK4 / Firefox)                |
-+-----------------------------------------------------------------------------------+
-                               |  zwp_text_input_v3
-                               |  - enable() / disable()
-                               |  - set_surrounding_text()
-                               |  - set_content_type(hint, purpose)
-                               v
-+-----------------------------------------------------------------------------------+
-|                                Compositor (Hyprland)                              |
-+-----------------------------------------------------------------------------------+
-                               |  zwp_input_method_v2
-                               |  - activate()   ---> triggers HyprOsk to show
-                               |  - deactivate() ---> triggers HyprOsk to hide
-                               |  - content_type() -> auto switches to number pad for PINs
-                               v
-+-----------------------------------------------------------------------------------+
-|                           HyprOsk (Wayland OSK Daemon)                            |
-|                                                                                   |
-|  1. Layer:      zwlr_layer_shell_v1 (Anchor: BOTTOM, keyboard_interactivity: 0)  |
-|  2. Input:      wl_touch / wl_pointer events                                      |
-|  3. Output:     zwp_input_method_v2.commit_string(utf8)                           |
-+-----------------------------------------------------------------------------------+
-```
+### 1. Nix flake (recommended)
 
----
-
-## 📦 Building & Running
-
-### Using Nix / NixOS
 ```bash
-# Enter nix development shell
-nix-shell
+nix build .#default
+./result/bin/hyprosk daemon
 
-# Build release binary
+# or run directly without installing
+nix run .# -- daemon
+```
+
+### 2. NixOS / Home Manager module
+
+Flake provides `nixosModules.default` and `homeManagerModules.default`.
+
+**NixOS (`flake.nix`):**
+```nix
+{
+  inputs.hyprosk.url = "github:CheeseGuru/Hyprosk";
+  # ...
+  outputs = { self, nixpkgs, hyprosk, ... }: {
+    nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        hyprosk.nixosModules.default
+        { programs.hyprosk.enable = true; }
+      ];
+    };
+  }
+}
+```
+This installs the package and enables a `systemd --user` service `hyprosk` bound to `graphical-session.target`.
+
+**Home Manager:**
+```nix
+{
+  inputs.hyprosk.url = "github:CheeseGuru/Hyprosk";
+  # ...
+  homeManagerConfiguration = {
+    imports = [ hyprosk.homeManagerModules.default ];
+    programs.hyprosk = {
+      enable = true;
+      settings.general.height = 420;
+      settings.behavior.folio_mode = true;
+    };
+  }
+}
+```
+Config is written to `~/.config/hyprosk/config.toml`. Service is bound to `hyprland-session.target` by default.
+
+Verify:
+```bash
+nix flake check
+nix run .# -- --version
+```
+
+### 3. Cargo (any distro)
+
+```bash
+# install dependencies (example: Arch/Debian)
+# arch: sudo pacman -S wayland wayland-protocols libxkbcommon pkgconf
+# debian/ubuntu: sudo apt install libwayland-dev libxkbcommon-dev pkg-config
+
 cargo build --release
-
-# Run HyprOsk daemon
 ./target/release/hyprosk daemon
 ```
 
-### Standard Linux (Cargo)
-Ensure `libwayland`, `libxkbcommon`, and `pkg-config` are installed:
-```bash
-cargo build --release
-```
+## Hyprland setup
 
----
-
-## ⚙️ Hyprland Integration (`hyprland.conf`)
-
-Add the following to your `~/.config/hypr/hyprland.conf`:
+Add to `~/.config/hypr/hyprland.conf`:
 
 ```ini
-# Launch HyprOsk on startup
 exec-once = hyprosk daemon
 
-# Optional: Bind a manual toggle key (e.g., Super + K)
-bind = $mainMod, K, exec, hyprosk toggle
+# optional manual toggle
+bind = SUPER, K, exec, hyprosk toggle
 
-# Layer rules for smooth animations and blur
 layerrule = blur, hyprosk
 layerrule = ignorezero, hyprosk
 layerrule = animation slide bottom, hyprosk
 ```
 
-### Touch Gestures (e.g., with `hyprgrass`)
-To swipe up from the bottom edge to show the keyboard:
+Optional swipe gesture (with hypr-touch):
 ```ini
-plugin:hyprgrass {
+plugin:touch {
     gesture = 1, up, edge, bottom, exec, hyprosk toggle
 }
 ```
 
----
+## Usage
 
-## 🎮 CLI Controls
+Daemon must be running. Default command with no args also starts the daemon:
 
 ```bash
-hyprosk show          # Show the keyboard
-hyprosk hide          # Hide the keyboard
-hyprosk toggle        # Toggle visibility
-hyprosk layer upper   # Switch to upper case
-hyprosk layer num     # Switch to numbers
-hyprosk layer sym     # Switch to symbols
-hyprosk layer nav     # Switch to navigation keys
-hyprosk layer emoji   # Switch to emoji picker
-hyprosk quit          # Stop daemon
+hyprosk              # same as hyprosk daemon
+hyprosk daemon       # start daemon (foreground)
+hyprosk show         # show
+hyprosk hide         # hide
+hyprosk toggle       # toggle
+hyprosk layer lower      # switch to lower case
+hyprosk layer upper      # switch to upper case
+hyprosk layer symbols    # symbols page 1
+hyprosk layer symbols2   # symbols page 2
+hyprosk clipboard    # toggle clipboard history view
+hyprosk status       # folio/tablet/keyboard detection + current auto-show state
+hyprosk quit         # stop daemon
 ```
 
----
+Custom config path:
+```bash
+hyprosk --config /path/to/config.toml daemon
+```
 
-## 🎨 Configuration (`~/.config/hyprosk/config.toml`)
+## Configuration
+
+File: `~/.config/hyprosk/config.toml` (auto-created on first run with defaults).
 
 ```toml
 [general]
-height = 320
-margin_bottom = 12
-margin_horizontal = 16
-corner_radius = 18.0
-exclusive_zone = true   # Pushes tiled windows up when open
-theme_name = "catppuccin"
+height = 420              # keyboard height in px
+margin_bottom = 0
+margin_horizontal = 0
+corner_radius = 0.0
+exclusive_zone = true     # true = push tiled windows up
+theme_name = "catppuccin" # theme name (currently wireframe palette is fixed in ui/osk.slint)
 
 [behavior]
-auto_show = true        # Automatically show when tapping input fields
+auto_show = true
+auto_hide = true
 hide_on_fullscreen = true
+folio_mode = false         # if true, suppress auto-show when physical keyboard attached
+touch_only = false         # if true, auto-show only when focus was triggered by touch
 long_press_ms = 400
+repeat_delay_ms = 350
+repeat_rate_ms = 45
+feedback_command = ""     # optional: e.g. "paplay /usr/share/sounds/click.ogg"
 
 [theme]
 background = "#1e1e2ecc"
@@ -142,19 +167,31 @@ border_color = "#585b7066"
 border_width = 1.0
 key_radius = 8.0
 key_spacing = 6.0
+opacity = 0.95
 ```
 
----
+> Note: Rendering uses Slint as a headless software renderer into the Wayland SHM buffer. The colors in `ui/osk.slint` are currently the source of truth for the on-screen palette. `theme` values are kept for compatibility/fallback.
 
-## 💡 Application Compatibility Matrix
+## How auto-show works
 
-To ensure all applications notify Hyprland when focusing text fields:
+```
+App (GTK/Qt/Firefox) -- zwp_text_input_v3 --> Compositor (Hyprland) -- zwp_input_method_v2 (activate/deactivate) --> HyprOsk -- zwp_virtual_keyboard_v1 (commit_string) --> App
+```
 
-- **GTK 4 / Foot Terminal:** Works natively out of the box.
-- **GTK 3:** Set `GTK_IM_MODULE=wayland` in your environment.
-- **Qt 5 / Qt 6:** Set `QT_IM_MODULE=wayland` and `QT_QPA_PLATFORM="wayland;xcb"`.
-- **Chromium / Electron / VSCode:** Launch with:
-  ```bash
-  --ozone-platform-hint=auto --ozone-platform=wayland --enable-wayland-ime
-  ```
-- **Firefox:** Enable Wayland windowing (`MOZ_ENABLE_WAYLAND=1`).
+HyprOsk is a layer-shell surface at the bottom. It never takes keyboard focus.
+
+## App compatibility
+
+Some apps need env vars/flags to announce text input over Wayland:
+
+- **GTK 3:** `GTK_IM_MODULE=wayland`
+- **Qt 5/6:** `QT_IM_MODULE=wayland` + `QT_QPA_PLATFORM="wayland;xcb"`
+- **Chromium / Electron / VS Code:** `--ozone-platform-hint=auto --ozone-platform=wayland --enable-wayland-ime`
+- **Firefox:** `MOZ_ENABLE_WAYLAND=1`
+- **GTK 4 / Foot:** works without extra config
+
+If auto-show does not trigger, run `hyprosk status` and check your compositor supports `zwp_input_method_v2`.
+
+## License
+
+MIT OR Apache-2.0
