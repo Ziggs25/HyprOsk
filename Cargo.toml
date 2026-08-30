@@ -2,7 +2,7 @@
 name = "hyprosk"
 version = "0.1.0"
 edition = "2024"
-authors = ["CheeseGuru & Antigravity"]
+authors = ["Ziggs25"]
 description = "Fast, lightweight, native Wayland On-Screen Keyboard designed for Hyprland with automatic input-field detection"
 license = "MIT OR Apache-2.0"
 

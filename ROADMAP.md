@@ -1,6 +1,6 @@
 # HyprOsk — Slint Overhaul Roadmap
 
-> Authoritative companion to `/home/CheeseGuru/keyboard wireframe.md`.
+> Authoritative companion to `keyboard wireframe.md`.
 > Kept in-repo so any agent (opencode/cline) can resume instantly.
 
 ## Goal
@@ -98,13 +98,13 @@ NixOS-first / Home-Manager-compatible.
 - `i-slint-core` direct dep must be `=1.14.0` for feature unification;
   `slint-build::compile_with_config` is the entry point.
 - Toolchain on this machine: only via
-  `nix-shell /home/CheeseGuru/repo/HyprOsk/shell.nix --run 'cargo ...'`
+  `nix-shell shell.nix --run 'cargo ...'`
   (no system-wide cargo). `/tmp` can be wiped between agent sessions.
 
 ## Verification commands
 
 ```bash
-cd /home/CheeseGuru/repo/HyprOsk
+cd HyprOsk
 nix-shell shell.nix --run 'cargo check'
 nix-shell shell.nix --run 'cargo clippy --all-targets'
 nix-shell shell.nix --run 'cargo build --release'

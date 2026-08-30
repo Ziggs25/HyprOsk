@@ -34,7 +34,7 @@
 
           meta = with pkgs.lib; {
             description = "Fast, lightweight native Wayland On-Screen Keyboard designed for Hyprland";
-            homepage = "https://github.com/CheeseGuru/HyprOsk";
+            homepage = "https://github.com/Ziggs25/HyprOsk";
             license = with licenses; [ mit asl20 ];
             maintainers = [ ];
             platforms = platforms.linux;

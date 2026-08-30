@@ -37,7 +37,7 @@ Flake provides `nixosModules.default` and `homeManagerModules.default`.
 **NixOS (`flake.nix`):**
 ```nix
 {
-  inputs.hyprosk.url = "github:CheeseGuru/Hyprosk";
+  inputs.hyprosk.url = "github:Ziggs25/HyprOsk";
   # ...
   outputs = { self, nixpkgs, hyprosk, ... }: {
     nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
@@ -54,7 +54,7 @@ This installs the package and enables a `systemd --user` service `hyprosk` bound
 **Home Manager:**
 ```nix
 {
-  inputs.hyprosk.url = "github:CheeseGuru/Hyprosk";
+  inputs.hyprosk.url = "github:Ziggs25/HyprOsk";
   # ...
   homeManagerConfiguration = {
     imports = [ hyprosk.homeManagerModules.default ];

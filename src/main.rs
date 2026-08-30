@@ -4,7 +4,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 #[derive(Parser, Debug)]
 #[command(name = "hyprosk")]
-#[command(author = "CheeseGuru & Antigravity")]
+#[command(author = "Ziggs25")]
 #[command(version = "0.1.0")]
 #[command(about = "Fast, lightweight native Wayland On-Screen Keyboard for Hyprland with auto input-field detection", long_about = None)]
 struct Cli {
