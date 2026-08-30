@@ -82,7 +82,6 @@ impl Dictionary {
         let mut rank = 0u32;
         let max_rank = 10000u32;
         let wordlist = if let Ok(c) = std::fs::read_to_string("assets/google-10000-english.txt") { c }
-            else if let Ok(c) = std::fs::read_to_string("/home/CheeseGuru/repo/HyprOsk/assets/google-10000-english.txt") { c }
             else { include_str!("../../assets/google-10000-english.txt").to_string() };
         for line in wordlist.lines() {
             let w = line.trim().to_lowercase();
