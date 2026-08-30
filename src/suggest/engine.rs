@@ -22,6 +22,10 @@ impl SuggestEngine {
         }
     }
 
+    pub fn swipe_candidates(&self, path: &[char]) -> Vec<String> {
+        crate::suggest::swipe::swipe_candidates(path, &self.dictionary)
+    }
+
     pub fn push_char(&mut self, ch: char) {
         if ch.is_alphabetic() || ch == '\'' {
             self.current_word.push(ch);
