@@ -56,8 +56,9 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
                 }
             }
             zwp_input_method_v2::Event::SurroundingText { text, cursor, anchor: _ } => {
-                state.im_state.surrounding_text = Some(text);
+                state.im_state.surrounding_text = Some(text.clone());
                 state.im_state.cursor_pos = cursor;
+                state.sync_suggest_with_surrounding(&text, cursor, qh);
             }
             zwp_input_method_v2::Event::ContentType { hint, purpose } => {
                 state.im_state.content_hint = hint.into();
