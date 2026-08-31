@@ -21,9 +21,8 @@ use smithay_client_toolkit::{
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::AsFd;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 use wayland_client::{
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch, wl_shm},
     Connection, QueueHandle,
@@ -119,9 +118,8 @@ pub struct WaylandState {
     pub pressed_keys: Vec<(usize, usize)>,
     pub active_touches: HashMap<i32, (usize, usize)>,
     pub pending_taps: HashMap<i32, (usize, usize)>,
-    pub swipe_active: HashMap<i32, bool>,
-    pub swipe_paths: HashMap<i32, Vec<char>>,
-    pub swipe_starts: HashMap<i32, (f64, f64)>,
+    pub pending_tap_details: HashMap<i32, (KeyAction, Option<String>, Instant)>,
+    pub pointer_pending_detail: Option<(KeyAction, Option<String>, Instant)>,
     /// Slint headless paint scene (lazily initialized on first redraw).
     pub slint_scene: Option<SlintScene>,
 
@@ -141,6 +139,15 @@ pub struct WaylandState {
     // Hold-to-type secondary (sub) characters: press time for the current key.
     pub press_instant: Option<Instant>,
     pub hold_preview: Option<HoldPreview>,
+
+    // Key repeat (e.g. holding backspace to continuously delete)
+    pub repeat_key: Option<KeyAction>,
+    pub repeat_start: Option<Instant>,
+    pub last_repeat_at: Option<Instant>,
+
+    // Double-tap Shift CapsLock
+    pub caps_lock: bool,
+    pub last_shift_press: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,9 +216,8 @@ impl WaylandState {
             pressed_keys: Vec::new(),
             active_touches: HashMap::new(),
             pending_taps: HashMap::new(),
-            swipe_active: HashMap::new(),
-            swipe_paths: HashMap::new(),
-            swipe_starts: HashMap::new(),
+            pending_tap_details: HashMap::new(),
+            pointer_pending_detail: None,
             slint_scene: None,
             space_touch_start: None,
             space_last_x: 0.0,
@@ -221,6 +227,11 @@ impl WaylandState {
             clipboard_history: VecDeque::new(),
             press_instant: None,
             hold_preview: None,
+            repeat_key: None,
+            repeat_start: None,
+            last_repeat_at: None,
+            caps_lock: false,
+            last_shift_press: None,
         }
     }
 
@@ -432,7 +443,7 @@ impl WaylandState {
             self.layout = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
         } else {
             self.layout =
-                KeyboardLayout::get_layout(self.current_layer, &self.suggest_engine.candidates);
+                KeyboardLayout::get_layout_with_caps(self.current_layer, &self.suggest_engine.candidates, self.caps_lock);
         }
         self.redraw(qh);
     }
@@ -549,7 +560,7 @@ impl WaylandState {
     }
 
     pub fn handle_key_press(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
-        let (action, secondary) = {
+        let action = {
             let row = match self.layout.rows.get(r_idx) {
                 Some(r) => r,
                 None => return,
@@ -558,7 +569,7 @@ impl WaylandState {
                 Some(k) => k,
                 None => return,
             };
-            (key.action.clone(), key.secondary_label.clone())
+            key.action.clone()
         };
 
         tracing::debug!("Key pressed: {:?}", action);
@@ -566,11 +577,8 @@ impl WaylandState {
         if !self.pressed_keys.contains(&(r_idx, k_idx)) {
             self.pressed_keys.push((r_idx, k_idx));
         }
-        self.press_instant = Some(Instant::now());
-
-        if matches!(action, KeyAction::Text(_)) && secondary.is_some() {
-            self.sync_layout_and_redraw(qh);
-            return;
+        if !matches!(action, KeyAction::Shift) {
+            self.last_shift_press = None;
         }
 
         match action {
@@ -579,8 +587,10 @@ impl WaylandState {
                     self.suggest_engine.push_char(ch);
                 }
                 self.send_text(&text);
-                if self.current_layer == LayerId::Upper {
+                if !self.caps_lock && self.current_layer == LayerId::Upper {
                     self.current_layer = LayerId::Lower;
+                    self.pending_mods &= !Self::MOD_SHIFT;
+                    self.sync_mods();
                 }
             }
             KeyAction::Suggestion(idx) => {
@@ -640,6 +650,9 @@ impl WaylandState {
             KeyAction::Backspace => {
                 self.suggest_engine.pop_char();
                 self.send_backspace();
+                self.repeat_key = Some(KeyAction::Backspace);
+                self.repeat_start = Some(Instant::now());
+                self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::Enter => {
                 self.suggest_engine.clear();
@@ -656,21 +669,41 @@ impl WaylandState {
                 self.send_escape();
             }
             KeyAction::Shift => {
-                let next = if self.current_layer == LayerId::Lower {
-                    LayerId::Upper
-                } else {
-                    LayerId::Lower
-                };
-                self.current_layer = next;
-                if self.pending_mods & Self::MOD_SHIFT != 0 {
+                if self.caps_lock {
+                    self.caps_lock = false;
+                    self.current_layer = LayerId::Lower;
                     self.pending_mods &= !Self::MOD_SHIFT;
-                } else {
+                    self.last_shift_press = None;
+                    self.sync_mods();
+                    tracing::info!("caps lock OFF");
+                } else if let Some(prev) = self.last_shift_press
+                    && prev.elapsed().as_millis() <= 350
+                {
+                    self.caps_lock = true;
+                    self.current_layer = LayerId::Upper;
                     self.pending_mods |= Self::MOD_SHIFT;
+                    self.last_shift_press = None;
+                    self.sync_mods();
+                    tracing::info!("caps lock ON via double tap");
+                } else {
+                    self.last_shift_press = Some(Instant::now());
+                    let next = if self.current_layer == LayerId::Lower {
+                        LayerId::Upper
+                    } else {
+                        LayerId::Lower
+                    };
+                    self.current_layer = next;
+                    if next == LayerId::Upper {
+                        self.pending_mods |= Self::MOD_SHIFT;
+                    } else {
+                        self.pending_mods &= !Self::MOD_SHIFT;
+                    }
+                    self.sync_mods();
+                    tracing::info!("shift tap toggled, pending {:b}", self.pending_mods);
                 }
-                self.sync_mods();
-                tracing::info!("shift hold pending {:b}", self.pending_mods);
             }
             KeyAction::SwitchLayer(layer) => {
+                self.caps_lock = false;
                 self.current_layer = layer;
             }
             KeyAction::Hide => {
@@ -738,18 +771,6 @@ impl WaylandState {
     }
 
     pub fn handle_key_release(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
-        let hold_text = if let Some(row) = self.layout.rows.get(r_idx)
-            && let Some(key) = row.keys.get(k_idx)
-            && let KeyAction::Text(text) = &key.action
-            && let Some(sec) = &key.secondary_label
-        {
-            let elapsed = self.press_instant.map(|t| t.elapsed()).unwrap_or_default();
-            let hold = elapsed.as_millis() > 300;
-            Some(if hold { sec.clone() } else { text.clone() })
-        } else {
-            None
-        };
-
         let is_space_release = if let Some(row) = self.layout.rows.get(r_idx)
             && let Some(key) = row.keys.get(k_idx)
         {
@@ -758,19 +779,14 @@ impl WaylandState {
             false
         };
 
-        if let Some(chosen) = hold_text {
-            for ch in chosen.chars() {
-                self.suggest_engine.push_char(ch);
-            }
-            self.send_text(&chosen);
-            if self.current_layer == LayerId::Upper {
-                self.current_layer = LayerId::Lower;
-            }
-        } else if is_space_release {
+        if is_space_release {
             self.suggest_engine.clear();
             self.send_space();
         }
 
+        self.repeat_key = None;
+        self.repeat_start = None;
+        self.last_repeat_at = None;
         self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
         self.pressed_key = self.pressed_keys.last().copied();
         if self.pressed_keys.is_empty() {
@@ -781,6 +797,29 @@ impl WaylandState {
             self.swipe_offset = None;
         }
         self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn update_key_repeat(&mut self, _qh: &QueueHandle<Self>) {
+        if let Some(KeyAction::Backspace) = self.repeat_key
+            && let Some(start) = self.repeat_start
+        {
+            let delay = Duration::from_millis(self.config.behavior.repeat_delay_ms.max(200));
+            let rate = Duration::from_millis(self.config.behavior.repeat_rate_ms.max(30));
+            if start.elapsed() >= delay {
+                let now = Instant::now();
+                if let Some(last) = self.last_repeat_at {
+                    if now.duration_since(last) >= rate {
+                        self.suggest_engine.pop_char();
+                        self.send_backspace();
+                        self.last_repeat_at = Some(now);
+                    }
+                } else {
+                    self.suggest_engine.pop_char();
+                    self.send_backspace();
+                    self.last_repeat_at = Some(now);
+                }
+            }
+        }
     }
 
     pub fn update_hold_preview(&mut self, qh: &QueueHandle<Self>) {
@@ -844,7 +883,7 @@ impl WaylandState {
     }
 
     pub fn send_text(&mut self, text: &str) {
-        let has_mods = self.pending_mods != 0;
+        let has_mods = (self.pending_mods & !Self::MOD_SHIFT) != 0;
         let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
         let has_surrounding = self.im_state.surrounding_text.is_some();
         tracing::info!("send_text '{}' is_im={} has_mods={} surrounding={:?} cursor={}", text, is_im_active, has_mods, self.im_state.surrounding_text, self.im_state.cursor_pos);
@@ -1047,11 +1086,49 @@ impl PointerHandler for WaylandState {
                             self.space_last_x = x;
                             self.is_space_swiping = false;
                         }
-                        self.handle_key_press(r_idx, k_idx, qh);
+                        if matches!(key.action, KeyAction::Text(_)) {
+                            self.last_shift_press = None;
+                            self.pressed_key = Some((r_idx, k_idx));
+                            self.press_instant = Some(Instant::now());
+                            if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+                                self.pressed_keys.push((r_idx, k_idx));
+                            }
+                            self.pointer_pending_detail = Some((key.action.clone(), key.secondary_label.clone(), Instant::now()));
+                            self.redraw(qh);
+                        } else {
+                            self.handle_key_press(r_idx, k_idx, qh);
+                        }
                     }
                 }
                 PointerEventKind::Release { .. } => {
-                    if let Some((r_idx, k_idx)) = self.pressed_key {
+                    if let Some((action, secondary_label, down_time)) = self.pointer_pending_detail.take() {
+                        let elapsed = down_time.elapsed();
+                        let is_long_press = elapsed.as_millis() >= 300;
+                        if is_long_press && let Some(sec) = secondary_label {
+                            for ch in sec.chars() {
+                                self.suggest_engine.push_char(ch);
+                            }
+                            self.send_text(&sec);
+                        } else if let KeyAction::Text(primary) = action {
+                            for ch in primary.chars() {
+                                self.suggest_engine.push_char(ch);
+                            }
+                            self.send_text(&primary);
+                        }
+                        if !self.caps_lock && self.current_layer == LayerId::Upper {
+                            self.current_layer = LayerId::Lower;
+                            self.pending_mods &= !Self::MOD_SHIFT;
+                            self.sync_mods();
+                        }
+                        self.pressed_keys.clear();
+                        self.pressed_key = None;
+                        self.press_instant = None;
+                        self.hold_preview = None;
+                        self.repeat_key = None;
+                        self.repeat_start = None;
+                        self.last_repeat_at = None;
+                        self.sync_layout_and_redraw(qh);
+                    } else if let Some((r_idx, k_idx)) = self.pressed_key {
                         self.handle_key_release(r_idx, k_idx, qh);
                     }
                 }
@@ -1086,11 +1163,9 @@ impl TouchHandler for WaylandState {
             }
             self.active_touches.insert(_id, (r_idx, k_idx));
             if matches!(key.action, KeyAction::Text(_)) {
-                let ch = key.label.chars().next().unwrap_or('?').to_ascii_lowercase();
+                self.last_shift_press = None;
                 self.pending_taps.insert(_id, (r_idx, k_idx));
-                self.swipe_paths.insert(_id, vec![ch]);
-                self.swipe_active.insert(_id, false);
-                self.swipe_starts.insert(_id, (x, y));
+                self.pending_tap_details.insert(_id, (key.action.clone(), key.secondary_label.clone(), Instant::now()));
                 if !self.pressed_keys.contains(&(r_idx, k_idx)) {
                     self.pressed_keys.push((r_idx, k_idx));
                 }
@@ -1115,61 +1190,35 @@ impl TouchHandler for WaylandState {
         _id: i32,
     ) {
         tracing::info!("touch up id={} active_before={}", _id, self.active_touches.len());
-        let is_swipe = self.swipe_active.remove(&_id).unwrap_or(false);
-        let path = self.swipe_paths.remove(&_id);
-        self.swipe_starts.remove(&_id);
+        let details = self.pending_tap_details.remove(&_id);
         if let Some(pending) = self.pending_taps.remove(&_id) {
             self.active_touches.remove(&_id);
             self.pressed_keys.retain(|&p| p != pending);
             self.pressed_key = self.pressed_keys.last().copied();
-            if is_swipe {
-                if let Some(p) = path {
-                    if p.len() >= 2 {
-                        let cands = self.suggest_engine.swipe_candidates(&p);
-                        tracing::info!("swipe path {:?} -> {:?}", p, cands);
-                        if let Some(word) = cands.first().cloned() {
-                            let cur = self.suggest_engine.current_word.clone();
-                            if !cur.is_empty() {
-                                let is_im = self.im_state.is_active.load(Ordering::SeqCst);
-                                let use_im_delete = is_im
-                                    && self.input_method.is_some()
-                                    && self
-                                        .im_state
-                                        .surrounding_text
-                                        .as_ref()
-                                        .is_some_and(|t| {
-                                            let before = &t[..self.im_state.cursor_pos.min(t.len() as u32) as usize];
-                                            before.ends_with(&cur)
-                                        });
-                                if use_im_delete {
-                                    let before = cur.len() as u32;
-                                    if let Some(ref im) = self.input_method {
-                                        im.delete_surrounding_text(before, 0);
-                                        im.commit(self.im_state.serial);
-                                        self.im_state.serial = self.im_state.serial.wrapping_add(1);
-                                    }
-                                } else {
-                                    for _ in 0..cur.chars().count() {
-                                        self.send_backspace();
-                                    }
-                                }
-                                self.suggest_engine.clear();
-                            }
-                            self.send_text(&format!("{} ", word));
-                            self.suggest_engine.clear();
-                        }
+            if let Some((action, secondary_label, down_time)) = details {
+                let elapsed = down_time.elapsed();
+                let is_long_press = elapsed.as_millis() >= 300;
+
+                if is_long_press && let Some(sec) = secondary_label {
+                    for ch in sec.chars() {
+                        self.suggest_engine.push_char(ch);
                     }
+                    self.send_text(&sec);
+                } else if let KeyAction::Text(primary) = action {
+                    for ch in primary.chars() {
+                        self.suggest_engine.push_char(ch);
+                    }
+                    self.send_text(&primary);
                 }
-                self.pressed_keys.clear();
-                self.pressed_key = None;
-                self.press_instant = None;
+
+                if !self.caps_lock && self.current_layer == LayerId::Upper {
+                    self.current_layer = LayerId::Lower;
+                    self.pending_mods &= !Self::MOD_SHIFT;
+                    self.sync_mods();
+                }
                 self.hold_preview = None;
-                self.redraw(qh);
-                return;
-            } else {
-                let (r_idx, k_idx) = pending;
-                self.handle_key_press(r_idx, k_idx, qh);
-                self.handle_key_release(r_idx, k_idx, qh);
+                self.press_instant = None;
+                self.sync_layout_and_redraw(qh);
                 return;
             }
         }
@@ -1190,35 +1239,6 @@ impl TouchHandler for WaylandState {
         position: (f64, f64),
     ) {
         let (x, y) = position;
-        if let Some(start) = self.swipe_starts.get(&_id).copied() {
-            let dx = x - start.0;
-            let dy = y - start.1;
-            if dx * dx + dy * dy > 324.0 {
-                if !self.swipe_active.get(&_id).copied().unwrap_or(false) {
-                    self.swipe_active.insert(_id, true);
-                    tracing::info!("swipe start id={}", _id);
-                }
-            }
-            if self.swipe_active.get(&_id).copied().unwrap_or(false) {
-                let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
-                if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
-                    if matches!(key.action, KeyAction::Text(_)) {
-                        let ch = key.label.chars().next().unwrap_or('?').to_ascii_lowercase();
-                        if let Some(path) = self.swipe_paths.get_mut(&_id) {
-                            if path.last() != Some(&ch) {
-                                path.push(ch);
-                                tracing::info!("swipe path id={} -> {:?}", _id, path);
-                                if !self.pressed_keys.contains(&(r_idx, k_idx)) {
-                                    self.pressed_keys.push((r_idx, k_idx));
-                                    self.pressed_key = Some((r_idx, k_idx));
-                                    self.redraw(qh);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
         self.handle_motion(x, y, qh);
     }
 
@@ -1227,11 +1247,13 @@ impl TouchHandler for WaylandState {
         self.pressed_keys.clear();
         self.active_touches.clear();
         self.pending_taps.clear();
-        self.swipe_active.clear();
-        self.swipe_paths.clear();
-        self.swipe_starts.clear();
+        self.pending_tap_details.clear();
+        self.pointer_pending_detail = None;
         self.press_instant = None;
         self.hold_preview = None;
+        self.repeat_key = None;
+        self.repeat_start = None;
+        self.last_repeat_at = None;
         self.space_touch_start = None;
         self.is_space_swiping = false;
         self.swipe_offset = None;

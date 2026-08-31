@@ -25,13 +25,17 @@ mod flex {
 }
 
 impl KeyboardLayout {
-    pub fn get_layout(id: LayerId, suggestions: &[String]) -> Self {
+    pub fn get_layout_with_caps(id: LayerId, suggestions: &[String], caps_lock: bool) -> Self {
         match id {
-            LayerId::Lower => Self::letters(false, suggestions),
-            LayerId::Upper => Self::letters(true, suggestions),
+            LayerId::Lower => Self::letters(false, suggestions, false),
+            LayerId::Upper => Self::letters(true, suggestions, caps_lock),
             LayerId::Symbols => Self::symbols_page1(suggestions),
             LayerId::Symbols2 => Self::symbols_page2(suggestions),
         }
+    }
+
+    pub fn get_layout(id: LayerId, suggestions: &[String]) -> Self {
+        Self::get_layout_with_caps(id, suggestions, false)
     }
 
     /// A 46px action bar replacing the old suggestion row.
@@ -74,7 +78,7 @@ impl KeyboardLayout {
     /// Row 2: Tab · a-l + symbol sub-chars · Enter
     /// Row 3: Shift · z-m + symbol sub-chars · Shift
     /// Row 4: &123 · Ctrl · Win · Alt · Space · Mic · ◀ ▶
-    pub fn letters(upper: bool, suggestions: &[String]) -> Self {
+    pub fn letters(upper: bool, suggestions: &[String], caps_lock: bool) -> Self {
         use flex::*;
         let (id, upper) = if upper {
             (LayerId::Upper, true)
@@ -89,6 +93,7 @@ impl KeyboardLayout {
                 Key::text(text(ch)).with_secondary(sec)
             }
         };
+        let shift_label = if caps_lock { "⇪" } else { "⇧" };
 
         Self {
             id,
@@ -126,7 +131,7 @@ impl KeyboardLayout {
                 },
                 KeyboardRow {
                     keys: vec![
-                        Key::new("⇧", KeyAction::Shift).with_weight(SHIFT).special(),
+                        Key::new(shift_label, KeyAction::Shift).with_weight(SHIFT).special(),
                         dual('z', '*'),
                         dual('x', '"'),
                         dual('c', '\''),
@@ -134,7 +139,7 @@ impl KeyboardLayout {
                         dual('b', ';'),
                         dual('n', '!'),
                         dual('m', '?'),
-                        Key::new("⇧", KeyAction::Shift).with_weight(SHIFT).special(),
+                        Key::new(shift_label, KeyAction::Shift).with_weight(SHIFT).special(),
                     ],
                 },
                 KeyboardRow {
