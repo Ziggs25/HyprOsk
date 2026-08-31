@@ -47,6 +47,7 @@ fn eviocgsw() -> libc::c_ulong {
 }
 
 const EV_KEY: u32 = 0x01;
+const EV_SW: u32 = 0x05;
 const KEY_1: usize = 2;
 const KEY_0: usize = 11;
 const KEY_A: usize = 30;
@@ -55,6 +56,7 @@ const SW_TABLET_MODE: usize = 0x01;
 
 /// Bitmap size for the key capability: (KEY_MAX + 7) / 8 = 96 bytes.
 const KEY_BITMAP_BYTES: usize = 96;
+const SW_BITMAP_BYTES: usize = 8;
 
 /// True when any evdev device reports `SW_TABLET_MODE` set (folio detached).
 pub fn tablet_mode_active() -> bool {
@@ -71,6 +73,15 @@ pub fn tablet_mode_active() -> bool {
         if fd < 0 {
             continue;
         }
+
+        // Verify device supports EV_SW and specifically SW_TABLET_MODE
+        let mut sw_cap = [0u8; SW_BITMAP_BYTES];
+        let cap_ret = unsafe { libc::ioctl(fd, eviocgbit(EV_SW, SW_BITMAP_BYTES), sw_cap.as_mut_ptr()) };
+        if cap_ret < 0 || (sw_cap[SW_TABLET_MODE / 8] >> (SW_TABLET_MODE % 8)) & 1 == 0 {
+            unsafe { libc::close(fd) };
+            continue;
+        }
+
         let mut sw: [u8; 8] = [0; 8];
         let ret = unsafe { libc::ioctl(fd, eviocgsw(), sw.as_mut_ptr()) };
         unsafe { libc::close(fd) };
