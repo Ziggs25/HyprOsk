@@ -596,20 +596,21 @@ impl WaylandState {
             KeyAction::Suggestion(idx) => {
                 if let Some(chosen_word) = self.suggest_engine.candidates.get(idx).cloned() {
                     let cur = self.suggest_engine.current_word.clone();
+                    let is_next_word = self.suggest_engine.is_next_word_mode;
                     tracing::info!(
-                        "suggest tap idx={} cur='{}' chosen='{}' surrounding={:?} cursor={} is_im={} candidates={:?}",
+                        "suggest tap idx={} cur='{}' chosen='{}' is_next_word={}",
                         idx,
                         cur,
                         chosen_word,
-                        self.im_state.surrounding_text,
-                        self.im_state.cursor_pos,
-                        self.im_state.is_active.load(Ordering::SeqCst),
-                        self.suggest_engine.candidates
+                        is_next_word,
                     );
-                    if chosen_word == cur {
+                    if is_next_word {
+                        self.suggest_engine.on_word_selected(&chosen_word);
+                        self.send_text(&format!("{} ", chosen_word));
+                    } else if chosen_word == cur {
                         tracing::info!("suggest same -> space");
+                        self.suggest_engine.on_word_selected(&chosen_word);
                         self.send_text(" ");
-                        self.suggest_engine.clear();
                     } else {
                         let is_im = self.im_state.is_active.load(Ordering::SeqCst);
                         let use_im_delete = is_im
@@ -631,7 +632,7 @@ impl WaylandState {
                                 im.commit(self.im_state.serial);
                                 self.im_state.serial = self.im_state.serial.wrapping_add(1);
                             }
-                            self.suggest_engine.clear();
+                            self.suggest_engine.on_word_selected(&chosen_word);
                             tracing::info!("suggest send_text '{} ' via im", chosen_word);
                             self.send_text(&format!("{} ", chosen_word));
                         } else {
@@ -640,7 +641,7 @@ impl WaylandState {
                             for _ in 0..n {
                                 self.send_backspace();
                             }
-                            self.suggest_engine.clear();
+                            self.suggest_engine.on_word_selected(&chosen_word);
                             tracing::info!("suggest send_text '{} ' via vk", chosen_word);
                             self.send_text(&format!("{} ", chosen_word));
                         }
@@ -780,7 +781,7 @@ impl WaylandState {
         };
 
         if is_space_release {
-            self.suggest_engine.clear();
+            self.suggest_engine.on_space();
             self.send_space();
         }
 
