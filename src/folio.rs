@@ -173,11 +173,41 @@ pub fn proc_keyboard_present() -> bool {
     false
 }
 
+/// Check if the physical folio USB device (Alps Folio Keyboard / Touchpad 044e:1218)
+/// is physically attached to the USB bus.
+pub fn usb_folio_present() -> bool {
+    if let Ok(entries) = fs::read_dir("/sys/bus/usb/devices") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let vendor_path = path.join("idVendor");
+            let product_path = path.join("idProduct");
+            if let Ok(vendor) = fs::read_to_string(&vendor_path)
+                && let Ok(product) = fs::read_to_string(&product_path)
+            {
+                if vendor.trim().eq_ignore_ascii_case("044e") && product.trim().eq_ignore_ascii_case("1218") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Returns true when at least one usable physical keyboard is present
 /// (i.e. the folio is attached).
 pub fn physical_keyboard_attached() -> bool {
-    // Tablet mode is authoritative: the folio is detached even if a stale
-    // input device remains registered.
+    // 1. Direct hardware USB presence of the Dell Latitude Folio:
+    // If the folio is physically plugged into the pogo pins, its USB hub is powered and present.
+    if usb_folio_present() {
+        // If the folio is physically attached, only consider it detached if tablet mode is explicitly active (folded back 360 deg)
+        if tablet_mode_active() {
+            tracing::debug!("SW_TABLET_MODE active (folded back), folio considered detached");
+            return false;
+        }
+        return true;
+    }
+
+    // 2. Fallback for non-USB folios or external keyboards:
     if tablet_mode_active() {
         tracing::debug!("SW_TABLET_MODE active, folio considered detached");
         return false;
@@ -192,18 +222,22 @@ pub fn physical_keyboard_attached() -> bool {
     fallback
 }
 
-/// Spawns a background thread that polls folio presence every
-/// [`POLL_INTERVAL`] and sends each *change* through `tx` (`true` = attached,
-/// `false` = detached).
+/// Spawns a background thread that polls folio presence with debouncing
+/// and sends each confirmed change through `tx` (`true` = attached, `false` = detached).
 pub fn spawn_folio_poller(tx: Sender<bool>) {
     thread::spawn(move || {
         let mut last = physical_keyboard_attached();
         loop {
-            thread::sleep(POLL_INTERVAL);
+            thread::sleep(Duration::from_millis(500));
             let now = physical_keyboard_attached();
             if now != last {
-                let _ = tx.send(now);
-                last = now;
+                // Debounce: verify the state again after 300ms to eliminate mechanical jitter
+                thread::sleep(Duration::from_millis(300));
+                let confirmed = physical_keyboard_attached();
+                if confirmed == now {
+                    let _ = tx.send(confirmed);
+                    last = confirmed;
+                }
             }
         }
     });
