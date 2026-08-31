@@ -118,6 +118,10 @@ pub struct WaylandState {
     pub pressed_key: Option<(usize, usize)>,
     pub pressed_keys: Vec<(usize, usize)>,
     pub active_touches: HashMap<i32, (usize, usize)>,
+    pub pending_taps: HashMap<i32, (usize, usize)>,
+    pub swipe_active: HashMap<i32, bool>,
+    pub swipe_paths: HashMap<i32, Vec<char>>,
+    pub swipe_starts: HashMap<i32, (f64, f64)>,
     /// Slint headless paint scene (lazily initialized on first redraw).
     pub slint_scene: Option<SlintScene>,
 
@@ -204,6 +208,10 @@ impl WaylandState {
             pressed_key: None,
             pressed_keys: Vec::new(),
             active_touches: HashMap::new(),
+            pending_taps: HashMap::new(),
+            swipe_active: HashMap::new(),
+            swipe_paths: HashMap::new(),
+            swipe_starts: HashMap::new(),
             slint_scene: None,
             space_touch_start: None,
             space_last_x: 0.0,
@@ -577,12 +585,56 @@ impl WaylandState {
             }
             KeyAction::Suggestion(idx) => {
                 if let Some(chosen_word) = self.suggest_engine.candidates.get(idx).cloned() {
-                    let preedit_len = self.suggest_engine.current_word.chars().count();
-                    for _ in 0..preedit_len {
-                        self.send_backspace();
+                    let cur = self.suggest_engine.current_word.clone();
+                    tracing::info!(
+                        "suggest tap idx={} cur='{}' chosen='{}' surrounding={:?} cursor={} is_im={} candidates={:?}",
+                        idx,
+                        cur,
+                        chosen_word,
+                        self.im_state.surrounding_text,
+                        self.im_state.cursor_pos,
+                        self.im_state.is_active.load(Ordering::SeqCst),
+                        self.suggest_engine.candidates
+                    );
+                    if chosen_word == cur {
+                        tracing::info!("suggest same -> space");
+                        self.send_text(" ");
+                        self.suggest_engine.clear();
+                    } else {
+                        let is_im = self.im_state.is_active.load(Ordering::SeqCst);
+                        let use_im_delete = is_im
+                            && self.input_method.is_some()
+                            && self
+                                .im_state
+                                .surrounding_text
+                                .as_ref()
+                                .is_some_and(|t| {
+                                    let before = &t[..self.im_state.cursor_pos.min(t.len() as u32) as usize];
+                                    before.ends_with(&cur)
+                                });
+                        tracing::info!("suggest use_im_delete={} before_len={} cur_len_chars={}", use_im_delete, cur.len(), cur.chars().count());
+                        if use_im_delete {
+                            let before = cur.len() as u32;
+                            if let Some(ref im) = self.input_method {
+                                tracing::info!("suggest im delete {} bytes", before);
+                                im.delete_surrounding_text(before, 0);
+                                im.commit(self.im_state.serial);
+                                self.im_state.serial = self.im_state.serial.wrapping_add(1);
+                            }
+                            self.suggest_engine.clear();
+                            tracing::info!("suggest send_text '{} ' via im", chosen_word);
+                            self.send_text(&format!("{} ", chosen_word));
+                        } else {
+                            let n = cur.chars().count();
+                            tracing::info!("suggest backspace loop n={}", n);
+                            for _ in 0..n {
+                                self.send_backspace();
+                            }
+                            self.suggest_engine.clear();
+                            tracing::info!("suggest send_text '{} ' via vk", chosen_word);
+                            self.send_text(&format!("{} ", chosen_word));
+                        }
                     }
-                    self.send_text(&format!("{} ", chosen_word));
-                    self.suggest_engine.clear();
                 }
             }
             KeyAction::Backspace => {
@@ -794,14 +846,19 @@ impl WaylandState {
     pub fn send_text(&mut self, text: &str) {
         let has_mods = self.pending_mods != 0;
         let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
-        if is_im_active && !has_mods
+        let has_surrounding = self.im_state.surrounding_text.is_some();
+        tracing::info!("send_text '{}' is_im={} has_mods={} surrounding={:?} cursor={}", text, is_im_active, has_mods, self.im_state.surrounding_text, self.im_state.cursor_pos);
+        let use_im = is_im_active && !has_mods && has_surrounding;
+        if use_im
             && let Some(ref im) = self.input_method
         {
             im.commit_string(text.to_string());
             im.commit(self.im_state.serial);
             self.im_state.serial = self.im_state.serial.wrapping_add(1);
+            tracing::info!("send_text via commit_string");
             return;
         }
+        tracing::info!("send_text via vk fallback");
 
         // Universal Virtual Keyboard Fallback for Terminal Emulators (Herdr, Foot, Kitty, etc.)
         for ch in text.chars() {
@@ -1028,7 +1085,21 @@ impl TouchHandler for WaylandState {
                 self.is_space_swiping = false;
             }
             self.active_touches.insert(_id, (r_idx, k_idx));
-            self.handle_key_press(r_idx, k_idx, qh);
+            if matches!(key.action, KeyAction::Text(_)) {
+                let ch = key.label.chars().next().unwrap_or('?').to_ascii_lowercase();
+                self.pending_taps.insert(_id, (r_idx, k_idx));
+                self.swipe_paths.insert(_id, vec![ch]);
+                self.swipe_active.insert(_id, false);
+                self.swipe_starts.insert(_id, (x, y));
+                if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+                    self.pressed_keys.push((r_idx, k_idx));
+                }
+                self.pressed_key = Some((r_idx, k_idx));
+                self.press_instant = Some(Instant::now());
+                self.redraw(qh);
+            } else {
+                self.handle_key_press(r_idx, k_idx, qh);
+            }
         } else {
             tracing::info!("  -> miss (no key)");
         }
@@ -1044,6 +1115,64 @@ impl TouchHandler for WaylandState {
         _id: i32,
     ) {
         tracing::info!("touch up id={} active_before={}", _id, self.active_touches.len());
+        let is_swipe = self.swipe_active.remove(&_id).unwrap_or(false);
+        let path = self.swipe_paths.remove(&_id);
+        self.swipe_starts.remove(&_id);
+        if let Some(pending) = self.pending_taps.remove(&_id) {
+            self.active_touches.remove(&_id);
+            self.pressed_keys.retain(|&p| p != pending);
+            self.pressed_key = self.pressed_keys.last().copied();
+            if is_swipe {
+                if let Some(p) = path {
+                    if p.len() >= 2 {
+                        let cands = self.suggest_engine.swipe_candidates(&p);
+                        tracing::info!("swipe path {:?} -> {:?}", p, cands);
+                        if let Some(word) = cands.first().cloned() {
+                            let cur = self.suggest_engine.current_word.clone();
+                            if !cur.is_empty() {
+                                let is_im = self.im_state.is_active.load(Ordering::SeqCst);
+                                let use_im_delete = is_im
+                                    && self.input_method.is_some()
+                                    && self
+                                        .im_state
+                                        .surrounding_text
+                                        .as_ref()
+                                        .is_some_and(|t| {
+                                            let before = &t[..self.im_state.cursor_pos.min(t.len() as u32) as usize];
+                                            before.ends_with(&cur)
+                                        });
+                                if use_im_delete {
+                                    let before = cur.len() as u32;
+                                    if let Some(ref im) = self.input_method {
+                                        im.delete_surrounding_text(before, 0);
+                                        im.commit(self.im_state.serial);
+                                        self.im_state.serial = self.im_state.serial.wrapping_add(1);
+                                    }
+                                } else {
+                                    for _ in 0..cur.chars().count() {
+                                        self.send_backspace();
+                                    }
+                                }
+                                self.suggest_engine.clear();
+                            }
+                            self.send_text(&format!("{} ", word));
+                            self.suggest_engine.clear();
+                        }
+                    }
+                }
+                self.pressed_keys.clear();
+                self.pressed_key = None;
+                self.press_instant = None;
+                self.hold_preview = None;
+                self.redraw(qh);
+                return;
+            } else {
+                let (r_idx, k_idx) = pending;
+                self.handle_key_press(r_idx, k_idx, qh);
+                self.handle_key_release(r_idx, k_idx, qh);
+                return;
+            }
+        }
         if let Some((r_idx, k_idx)) = self.active_touches.remove(&_id) {
             self.handle_key_release(r_idx, k_idx, qh);
         } else if let Some((r_idx, k_idx)) = self.pressed_key {
@@ -1061,6 +1190,35 @@ impl TouchHandler for WaylandState {
         position: (f64, f64),
     ) {
         let (x, y) = position;
+        if let Some(start) = self.swipe_starts.get(&_id).copied() {
+            let dx = x - start.0;
+            let dy = y - start.1;
+            if dx * dx + dy * dy > 324.0 {
+                if !self.swipe_active.get(&_id).copied().unwrap_or(false) {
+                    self.swipe_active.insert(_id, true);
+                    tracing::info!("swipe start id={}", _id);
+                }
+            }
+            if self.swipe_active.get(&_id).copied().unwrap_or(false) {
+                let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+                if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
+                    if matches!(key.action, KeyAction::Text(_)) {
+                        let ch = key.label.chars().next().unwrap_or('?').to_ascii_lowercase();
+                        if let Some(path) = self.swipe_paths.get_mut(&_id) {
+                            if path.last() != Some(&ch) {
+                                path.push(ch);
+                                tracing::info!("swipe path id={} -> {:?}", _id, path);
+                                if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+                                    self.pressed_keys.push((r_idx, k_idx));
+                                    self.pressed_key = Some((r_idx, k_idx));
+                                    self.redraw(qh);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.handle_motion(x, y, qh);
     }
 
@@ -1068,6 +1226,10 @@ impl TouchHandler for WaylandState {
         self.pressed_key = None;
         self.pressed_keys.clear();
         self.active_touches.clear();
+        self.pending_taps.clear();
+        self.swipe_active.clear();
+        self.swipe_paths.clear();
+        self.swipe_starts.clear();
         self.press_instant = None;
         self.hold_preview = None;
         self.space_touch_start = None;
