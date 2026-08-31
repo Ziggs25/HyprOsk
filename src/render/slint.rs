@@ -57,11 +57,13 @@ pub mod icon {
     pub const GUILLEMOTRIGHT: i32 = 31;
     pub const QUESTIONDOWN: i32 = 32;
     pub const PIN: i32 = 33;
+    pub const CAPSLOCK: i32 = 34;
 }
 
 const BACKSPACE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H7.07L2.4 12l4.66-7H22v14zm-11.59-2L14 13.41 17.59 17 19 15.59 15.41 12 19 8.41 17.59 7 14 10.59 10.41 7 9 8.41 12.59 12 9 15.59z"/></svg>"#;
 const ENTER_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M19 7v4H5.83l3.58-3.59L8 6l-6 6 6 6 1.41-1.41L5.83 13H21V7h-2z"/></svg>"#;
 const SHIFT_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="{COLOR}" stroke-width="2" d="M4 15h6v5h4v-5h6L12 4 4 15z"/></svg>"#;
+const CAPSLOCK_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="{COLOR}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 14h6v3h4v-3h6L12 3 4 14zm-1 7h18"/></svg>"#;
 const WIN_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/></svg>"#;
 const MIC_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-2.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>"#;
 const ARROW_L_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{COLOR}" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>"#;
@@ -155,6 +157,7 @@ impl SlintScene {
         ui.set_icon_backspace(svg(BACKSPACE_SVG, "#fff"));
         ui.set_icon_enter(svg(ENTER_SVG, "#fff"));
         ui.set_icon_shift(svg(SHIFT_SVG, "#fff"));
+        ui.set_icon_capslock(svg(CAPSLOCK_SVG, "#fff"));
         ui.set_icon_win(svg(WIN_SVG, "#fff"));
         ui.set_icon_mic(svg(MIC_SVG, "#fff"));
         ui.set_icon_arrow_l(svg(ARROW_L_SVG, "#fff"));
@@ -205,7 +208,13 @@ impl SlintScene {
         match action {
             KeyAction::Backspace => icon::BACKSPACE,
             KeyAction::Enter => icon::ENTER,
-            KeyAction::Shift => icon::SHIFT,
+            KeyAction::Shift => {
+                if label == "⇪" {
+                    icon::CAPSLOCK
+                } else {
+                    icon::SHIFT
+                }
+            }
             KeyAction::Win => icon::WIN,
             KeyAction::ArrowLeft => icon::ARROW_L,
             KeyAction::ArrowRight => icon::ARROW_R,

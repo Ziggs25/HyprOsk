@@ -28,9 +28,6 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-/// Seconds between folio presence polls.
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
-
 use libc;
 
 // EVIOCGBIT(ev, len) = _IOC(_IOC_READ, 'E', 0x20 + ev, len)

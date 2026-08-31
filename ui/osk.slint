@@ -105,7 +105,9 @@ component KeyVisual {
         height: k.h - (k.is-pressed ? 4px : 0px);
         background: k.is-suggestion
             ? (k.is-pressed ? suggest-bg-pressed : suggest-bg)
-            : (k.is-pressed ? key-bg-pressed : key-bg);
+            : (k.icon == 34 ? #363a4f : (k.is-pressed ? #313244 : key-bg));
+        border-color: k.icon == 34 ? #89b4fa : (k.is-pressed ? #585b70 : transparent);
+        border-width: (k.icon == 34 || k.is-pressed) ? 1.5px : 0px;
         border-radius: k.is-suggestion ? 8px : (k.is-space ? space-radius : key-radius);
         Image {
             visible: k.icon > 0 && !k.is-suggestion;
@@ -114,6 +116,7 @@ component KeyVisual {
             width: icon-size;
             height: icon-size;
             source: icon-img;
+            colorize: (k.icon == 34 || k.is-pressed) ? #89b4fa : #ffffff;
             image-fit: contain;
         }
         Text {
@@ -180,6 +183,7 @@ export component OskUi inherits Window {
     in property <image> icon-backspace;
     in property <image> icon-enter;
     in property <image> icon-shift;
+    in property <image> icon-capslock;
     in property <image> icon-win;
     in property <image> icon-mic;
     in property <image> icon-arrow-l;
@@ -242,6 +246,7 @@ export component OskUi inherits Window {
         icon-img: k.icon == 1 ? root.icon-backspace
                 : k.icon == 2 ? root.icon-enter
                 : k.icon == 3 ? root.icon-shift
+                : k.icon == 34 ? root.icon-capslock
                 : k.icon == 4 ? root.icon-win
                 : k.icon == 5 ? root.icon-mic
                 : k.icon == 6 ? root.icon-arrow-l

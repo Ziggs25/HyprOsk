@@ -166,6 +166,8 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
 
         // Update hold-preview for long-press secondary visualization (Gboard/HeliBoard style)
         state.update_hold_preview(&qh);
+        // Handle key repeat (e.g. hold backspace to continuously delete)
+        state.update_key_repeat(&qh);
 
         // Flush and wait for next event
         conn.flush()?;
