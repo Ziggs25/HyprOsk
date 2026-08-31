@@ -800,7 +800,12 @@ impl WaylandState {
         self.sync_layout_and_redraw(qh);
     }
 
-    pub fn update_key_repeat(&mut self, _qh: &QueueHandle<Self>) {
+    pub fn sync_suggest_with_surrounding(&mut self, text: &str, cursor: u32, qh: &QueueHandle<Self>) {
+        self.suggest_engine.sync_with_text(text, cursor as usize);
+        self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn update_key_repeat(&mut self, qh: &QueueHandle<Self>) {
         if let Some(KeyAction::Backspace) = self.repeat_key
             && let Some(start) = self.repeat_start
         {
@@ -808,16 +813,15 @@ impl WaylandState {
             let rate = Duration::from_millis(self.config.behavior.repeat_rate_ms.max(30));
             if start.elapsed() >= delay {
                 let now = Instant::now();
-                if let Some(last) = self.last_repeat_at {
-                    if now.duration_since(last) >= rate {
-                        self.suggest_engine.pop_char();
-                        self.send_backspace();
-                        self.last_repeat_at = Some(now);
-                    }
-                } else {
+                let should_fire = match self.last_repeat_at {
+                    Some(last) => now.duration_since(last) >= rate,
+                    None => true,
+                };
+                if should_fire {
                     self.suggest_engine.pop_char();
                     self.send_backspace();
                     self.last_repeat_at = Some(now);
+                    self.sync_layout_and_redraw(qh);
                 }
             }
         }
