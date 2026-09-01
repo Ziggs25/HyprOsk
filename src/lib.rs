@@ -120,6 +120,8 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                 IpcCommand::Show => state.show_keyboard(&qh),
                 IpcCommand::Hide => state.hide_keyboard(&qh),
                 IpcCommand::Toggle => state.toggle_keyboard(&qh),
+                IpcCommand::ToggleExclusivity => state.toggle_exclusivity(&qh),
+                IpcCommand::Reload => state.reload_config(&qh),
                 IpcCommand::Quit => state.is_running = false,
                 IpcCommand::SwitchLayer(layer_name) => {
                     let layer = match layer_name.to_lowercase().as_str() {

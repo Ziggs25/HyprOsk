@@ -9,6 +9,8 @@ pub enum IpcCommand {
     Show,
     Hide,
     Toggle,
+    ToggleExclusivity,
+    Reload,
     SwitchLayer(String),
     Clipboard,
     Quit,
@@ -63,6 +65,10 @@ impl IpcServer {
                                 "show" => ("OK: Shown\n", Some(IpcCommand::Show)),
                                 "hide" => ("OK: Hidden\n", Some(IpcCommand::Hide)),
                                 "toggle" => ("OK: Toggled\n", Some(IpcCommand::Toggle)),
+                                "exclusive" | "exclusivity" | "overlay" | "toggle-exclusive" => {
+                                    ("OK: Exclusivity Toggled\n", Some(IpcCommand::ToggleExclusivity))
+                                }
+                                "reload" => ("OK: Config Reloaded\n", Some(IpcCommand::Reload)),
                                 "clipboard" => ("OK: Clipboard\n", Some(IpcCommand::Clipboard)),
                                 "quit" => ("OK: Quitting\n", Some(IpcCommand::Quit)),
                                 s if s.starts_with("layer ") => {
