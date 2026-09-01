@@ -260,6 +260,11 @@ impl WaylandState {
             surface.commit();
         }
 
+        if let Some(ref text) = self.im_state.surrounding_text {
+            let cursor = self.im_state.cursor_pos;
+            self.suggest_engine.sync_with_text(text, cursor as usize);
+        }
+
         if self.is_configured {
             self.sync_layout_and_redraw(qh);
         }
@@ -279,7 +284,6 @@ impl WaylandState {
             surface.commit();
         }
         self.clipboard_mode = false;
-        self.suggest_engine.clear();
     }
 
     pub fn toggle_keyboard(&mut self, qh: &QueueHandle<Self>) {
@@ -287,6 +291,52 @@ impl WaylandState {
             self.hide_keyboard(qh);
         } else {
             self.show_keyboard(qh);
+        }
+    }
+
+    pub fn toggle_exclusivity(&mut self, _qh: &QueueHandle<Self>) {
+        self.config.general.exclusive_zone = !self.config.general.exclusive_zone;
+        tracing::info!(
+            "HyprOsk exclusivity toggled: exclusive_zone = {}",
+            self.config.general.exclusive_zone
+        );
+        if let Some(ref surface) = self.layer_surface {
+            let zone = if self.is_visible && self.config.general.exclusive_zone {
+                self.height as i32
+            } else {
+                0
+            };
+            surface.set_exclusive_zone(zone);
+            surface.commit();
+        }
+    }
+
+    pub fn reload_config(&mut self, qh: &QueueHandle<Self>) {
+        tracing::info!("Reloading HyprOsk configuration");
+        let new_config = Config::load_or_create(None);
+        self.theme = Theme::from(&new_config.theme);
+        self.height = new_config.general.height;
+        self.config = new_config;
+
+        if let Some(ref surface) = self.layer_surface {
+            surface.set_margin(
+                0,
+                self.config.general.margin_horizontal,
+                self.config.general.margin_bottom,
+                self.config.general.margin_horizontal,
+            );
+            surface.set_size(0, self.height);
+            let zone = if self.is_visible && self.config.general.exclusive_zone {
+                self.height as i32
+            } else {
+                0
+            };
+            surface.set_exclusive_zone(zone);
+            surface.commit();
+        }
+
+        if self.is_visible && self.is_configured {
+            self.sync_layout_and_redraw(qh);
         }
     }
 

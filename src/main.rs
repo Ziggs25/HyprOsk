@@ -29,6 +29,12 @@ enum Commands {
     Hide,
     /// Toggle on-screen keyboard visibility
     Toggle,
+    /// Toggle between overlay mode (floating on top of windows) and exclusive mode (tiled windows)
+    Exclusive,
+    /// Toggle between overlay mode (floating on top of windows) and exclusive mode (tiled windows)
+    Overlay,
+    /// Reload configuration from ~/.config/hyprosk/config.toml
+    Reload,
     /// Switch active keyboard layer (lower, upper, symbols)
     Layer {
         name: String,
@@ -67,6 +73,14 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Toggle) => {
             let resp = hyprosk::ipc::IpcServer::send_command("toggle")?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Exclusive) | Some(Commands::Overlay) => {
+            let resp = hyprosk::ipc::IpcServer::send_command("exclusive")?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Reload) => {
+            let resp = hyprosk::ipc::IpcServer::send_command("reload")?;
             println!("{}", resp.trim());
         }
         Some(Commands::Layer { name }) => {
