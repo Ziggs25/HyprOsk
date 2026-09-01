@@ -24,11 +24,29 @@ enum Commands {
         config: Option<PathBuf>,
     },
     /// Show the on-screen keyboard
-    Show,
+    Show {
+        /// Force tiled/exclusive mode
+        #[arg(long, short = 't', conflicts_with = "floating")]
+        tiled: bool,
+        /// Force floating/overlay mode
+        #[arg(long, short = 'f', alias = "overlay", conflicts_with = "tiled")]
+        floating: bool,
+    },
     /// Hide the on-screen keyboard
     Hide,
     /// Toggle on-screen keyboard visibility
-    Toggle,
+    Toggle {
+        /// Force tiled/exclusive mode
+        #[arg(long, short = 't', conflicts_with = "floating")]
+        tiled: bool,
+        /// Force floating/overlay mode
+        #[arg(long, short = 'f', alias = "overlay", conflicts_with = "tiled")]
+        floating: bool,
+    },
+    /// Toggle or switch to tiled/exclusive mode
+    Tiled,
+    /// Toggle or switch to floating/overlay mode
+    Floating,
     /// Toggle between overlay mode (floating on top of windows) and exclusive mode (tiled windows)
     Exclusive,
     /// Toggle between overlay mode (floating on top of windows) and exclusive mode (tiled windows)
@@ -63,16 +81,38 @@ fn main() -> anyhow::Result<()> {
             let conf_path = config.as_deref().or(cli.config.as_deref());
             hyprosk::run_daemon(conf_path)?;
         }
-        Some(Commands::Show) => {
-            let resp = hyprosk::ipc::IpcServer::send_command("show")?;
+        Some(Commands::Show { tiled, floating }) => {
+            let cmd = if tiled {
+                "show-tiled"
+            } else if floating {
+                "show-floating"
+            } else {
+                "show"
+            };
+            let resp = hyprosk::ipc::IpcServer::send_command(cmd)?;
             println!("{}", resp.trim());
         }
         Some(Commands::Hide) => {
             let resp = hyprosk::ipc::IpcServer::send_command("hide")?;
             println!("{}", resp.trim());
         }
-        Some(Commands::Toggle) => {
-            let resp = hyprosk::ipc::IpcServer::send_command("toggle")?;
+        Some(Commands::Toggle { tiled, floating }) => {
+            let cmd = if tiled {
+                "toggle-tiled"
+            } else if floating {
+                "toggle-floating"
+            } else {
+                "toggle"
+            };
+            let resp = hyprosk::ipc::IpcServer::send_command(cmd)?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Tiled) => {
+            let resp = hyprosk::ipc::IpcServer::send_command("toggle-tiled")?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Floating) => {
+            let resp = hyprosk::ipc::IpcServer::send_command("toggle-floating")?;
             println!("{}", resp.trim());
         }
         Some(Commands::Exclusive) | Some(Commands::Overlay) => {

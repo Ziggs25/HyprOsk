@@ -294,6 +294,53 @@ impl WaylandState {
         }
     }
 
+    pub fn show_keyboard_with_exclusivity(&mut self, qh: &QueueHandle<Self>, exclusive: bool) {
+        self.config.general.exclusive_zone = exclusive;
+        if self.is_visible {
+            if let Some(ref surface) = self.layer_surface {
+                let zone = if exclusive { self.height as i32 } else { 0 };
+                surface.set_exclusive_zone(zone);
+                surface.commit();
+            }
+        } else {
+            self.show_keyboard(qh);
+        }
+    }
+
+    pub fn toggle_keyboard_with_exclusivity(&mut self, qh: &QueueHandle<Self>, exclusive: bool) {
+        if self.is_visible {
+            if self.config.general.exclusive_zone != exclusive {
+                self.config.general.exclusive_zone = exclusive;
+                if let Some(ref surface) = self.layer_surface {
+                    let zone = if exclusive { self.height as i32 } else { 0 };
+                    surface.set_exclusive_zone(zone);
+                    surface.commit();
+                }
+            } else {
+                self.hide_keyboard(qh);
+            }
+        } else {
+            self.show_keyboard_with_exclusivity(qh, exclusive);
+        }
+    }
+
+    pub fn set_exclusivity(&mut self, _qh: &QueueHandle<Self>, exclusive: bool) {
+        self.config.general.exclusive_zone = exclusive;
+        tracing::info!(
+            "HyprOsk exclusivity set: exclusive_zone = {}",
+            self.config.general.exclusive_zone
+        );
+        if let Some(ref surface) = self.layer_surface {
+            let zone = if self.is_visible && self.config.general.exclusive_zone {
+                self.height as i32
+            } else {
+                0
+            };
+            surface.set_exclusive_zone(zone);
+            surface.commit();
+        }
+    }
+
     pub fn toggle_exclusivity(&mut self, _qh: &QueueHandle<Self>) {
         self.config.general.exclusive_zone = !self.config.general.exclusive_zone;
         tracing::info!(

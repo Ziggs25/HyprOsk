@@ -7,9 +7,12 @@ use std::thread;
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcCommand {
     Show,
+    ShowMode(bool),
     Hide,
     Toggle,
+    ToggleMode(bool),
     ToggleExclusivity,
+    SetExclusivity(bool),
     Reload,
     SwitchLayer(String),
     Clipboard,
@@ -63,10 +66,28 @@ impl IpcServer {
                             let text = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                             let (resp, cmd) = match text.as_str() {
                                 "show" => ("OK: Shown\n", Some(IpcCommand::Show)),
+                                "show-tiled" | "show tiled" | "show --tiled" | "tiled" => {
+                                    ("OK: Shown Tiled\n", Some(IpcCommand::ShowMode(true)))
+                                }
+                                "show-floating" | "show floating" | "show --floating" | "show-overlay" | "show overlay" | "show --overlay" | "floating" | "overlay" => {
+                                    ("OK: Shown Floating\n", Some(IpcCommand::ShowMode(false)))
+                                }
                                 "hide" => ("OK: Hidden\n", Some(IpcCommand::Hide)),
                                 "toggle" => ("OK: Toggled\n", Some(IpcCommand::Toggle)),
-                                "exclusive" | "exclusivity" | "overlay" | "toggle-exclusive" => {
+                                "toggle-tiled" | "toggle tiled" | "toggle --tiled" => {
+                                    ("OK: Toggled Tiled\n", Some(IpcCommand::ToggleMode(true)))
+                                }
+                                "toggle-floating" | "toggle floating" | "toggle --floating" | "toggle-overlay" | "toggle overlay" | "toggle --overlay" => {
+                                    ("OK: Toggled Floating\n", Some(IpcCommand::ToggleMode(false)))
+                                }
+                                "exclusive" | "exclusivity" | "toggle-exclusive" => {
                                     ("OK: Exclusivity Toggled\n", Some(IpcCommand::ToggleExclusivity))
+                                }
+                                "exclusive on" | "exclusive true" | "tiled on" => {
+                                    ("OK: Exclusivity On\n", Some(IpcCommand::SetExclusivity(true)))
+                                }
+                                "exclusive off" | "exclusive false" | "overlay on" | "floating on" => {
+                                    ("OK: Exclusivity Off\n", Some(IpcCommand::SetExclusivity(false)))
                                 }
                                 "reload" => ("OK: Config Reloaded\n", Some(IpcCommand::Reload)),
                                 "clipboard" => ("OK: Clipboard\n", Some(IpcCommand::Clipboard)),

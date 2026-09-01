@@ -118,9 +118,16 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         while let Ok(cmd) = ipc_rx.try_recv() {
             match cmd {
                 IpcCommand::Show => state.show_keyboard(&qh),
+                IpcCommand::ShowMode(exclusive) => {
+                    state.show_keyboard_with_exclusivity(&qh, exclusive)
+                }
                 IpcCommand::Hide => state.hide_keyboard(&qh),
                 IpcCommand::Toggle => state.toggle_keyboard(&qh),
+                IpcCommand::ToggleMode(exclusive) => {
+                    state.toggle_keyboard_with_exclusivity(&qh, exclusive)
+                }
                 IpcCommand::ToggleExclusivity => state.toggle_exclusivity(&qh),
+                IpcCommand::SetExclusivity(exclusive) => state.set_exclusivity(&qh, exclusive),
                 IpcCommand::Reload => state.reload_config(&qh),
                 IpcCommand::Quit => state.is_running = false,
                 IpcCommand::SwitchLayer(layer_name) => {
