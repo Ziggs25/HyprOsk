@@ -276,7 +276,8 @@ impl SlintScene {
         let mut pressed_index: i32 = -1;
         let mut flat = 0i32;
         for (r_idx, row) in rects.iter().enumerate() {
-            for (k_idx, (rect, _)) in row.iter().enumerate() {
+            for (rect, key_idx) in row.iter() {
+                let k_idx = *key_idx;
                 let Some(key) = layout.rows.get(r_idx).and_then(|r| r.keys.get(k_idx)) else {
                     continue;
                 };

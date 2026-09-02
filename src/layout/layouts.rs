@@ -47,22 +47,28 @@ impl KeyboardLayout {
     /// dismiss chevron (minimizes the keyboard).
     pub fn make_top_bar(suggestions: &[String]) -> KeyboardRow {
         let mut keys = Vec::new();
-        keys.push(Key::new("gear", KeyAction::None).with_weight(0.1).special());
-        keys.push(Key::new("palette", KeyAction::None).with_weight(0.1).special());
+        let action_weight = 0.35;
+        keys.push(Key::new("gear", KeyAction::None).with_weight(action_weight).special());
+        keys.push(Key::new("palette", KeyAction::None).with_weight(action_weight).special());
 
-        if suggestions.is_empty() {
-            for _ in 0..3 {
-                keys.push(Key::suggestion(0, ""));
+        let count = suggestions.len().min(3);
+        if count == 0 {
+            for idx in 0..3 {
+                keys.push(Key::suggestion(idx, ""));
             }
+        } else if count == 1 {
+            keys.push(Key::suggestion(0, &suggestions[0]).with_weight(1.0));
+        } else if count == 2 {
+            keys.push(Key::suggestion(0, &suggestions[0]).with_weight(1.0));
+            keys.push(Key::suggestion(1, &suggestions[1]).with_weight(1.0));
         } else {
-            for (idx, cand) in suggestions.iter().take(3).enumerate() {
-                let weight = if idx == 1 { 1.3 } else { 1.0 };
-                keys.push(Key::suggestion(idx, cand).with_weight(weight));
-            }
+            keys.push(Key::suggestion(0, &suggestions[0]).with_weight(1.0));
+            keys.push(Key::suggestion(1, &suggestions[1]).with_weight(1.3));
+            keys.push(Key::suggestion(2, &suggestions[2]).with_weight(1.0));
         }
 
-        keys.push(Key::new("", KeyAction::Clipboard).with_weight(0.1).special());
-        keys.push(Key::new("", KeyAction::Hide).with_weight(0.1).special());
+        keys.push(Key::new("", KeyAction::Clipboard).with_weight(action_weight).special());
+        keys.push(Key::new("", KeyAction::Hide).with_weight(action_weight).special());
         KeyboardRow { keys }
     }
 

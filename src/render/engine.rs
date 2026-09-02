@@ -45,22 +45,58 @@ impl RenderEngine {
         for (r_idx, row) in layout.rows.iter().enumerate() {
             let row_height = if r_idx == 0 { top_row_height } else { key_row_height };
             let mut row_rects = Vec::with_capacity(row.keys.len());
-            let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
-            let num_keys = row.keys.len();
-            let avail_width = total_width as f32 - (2.0 * padding_x) - ((num_keys.saturating_sub(1)) as f32 * spacing);
 
-            let mut current_x = padding_x;
+            if r_idx == 0 && row.keys.len() >= 4 {
+                let num_center = row.keys.len() - 4;
+                let action_width = ((total_width as f32 - 2.0 * padding_x - 6.0 * spacing) * (0.35 / (4.0 * 0.35 + 3.3))).round();
 
-            for (k_idx, key) in row.keys.iter().enumerate() {
-                let key_width = (avail_width * (key.width_weight / total_weights)).max(10.0);
-                let rect = Rect {
-                    x: current_x,
-                    y: current_y,
-                    w: key_width,
-                    h: row_height,
-                };
-                row_rects.push((rect, k_idx));
-                current_x += key_width + spacing;
+                // Left 2 buttons: Gear, Palette
+                let x0 = padding_x;
+                let x1 = x0 + action_width + spacing;
+                row_rects.push((Rect { x: x0, y: current_y, w: action_width, h: row_height }, 0));
+                row_rects.push((Rect { x: x1, y: current_y, w: action_width, h: row_height }, 1));
+
+                // Center suggestion region
+                let center_start_x = x1 + action_width + spacing;
+                let right_start_x = total_width as f32 - padding_x - 2.0 * action_width - spacing;
+                let center_avail_w = (right_start_x - center_start_x - spacing).max(10.0);
+
+                if num_center > 0 {
+                    let center_total_weight: f32 = row.keys[2..2 + num_center].iter().map(|k| k.width_weight).sum();
+                    let center_spacing_total = (num_center.saturating_sub(1)) as f32 * spacing;
+                    let center_keys_avail_w = (center_avail_w - center_spacing_total).max(10.0);
+
+                    let mut curr_cx = center_start_x;
+                    for (c_idx, key) in row.keys[2..2 + num_center].iter().enumerate() {
+                        let w = (center_keys_avail_w * (key.width_weight / center_total_weight)).max(10.0);
+                        row_rects.push((Rect { x: curr_cx, y: current_y, w, h: row_height }, 2 + c_idx));
+                        curr_cx += w + spacing;
+                    }
+                }
+
+                // Right 2 buttons: Clipboard, Hide
+                let x2 = right_start_x;
+                let x3 = x2 + action_width + spacing;
+                row_rects.push((Rect { x: x2, y: current_y, w: action_width, h: row_height }, 2 + num_center));
+                row_rects.push((Rect { x: x3, y: current_y, w: action_width, h: row_height }, 3 + num_center));
+            } else {
+                let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
+                let num_keys = row.keys.len();
+                let avail_width = total_width as f32 - (2.0 * padding_x) - ((num_keys.saturating_sub(1)) as f32 * spacing);
+
+                let mut current_x = padding_x;
+
+                for (k_idx, key) in row.keys.iter().enumerate() {
+                    let key_width = (avail_width * (key.width_weight / total_weights)).max(10.0);
+                    let rect = Rect {
+                        x: current_x,
+                        y: current_y,
+                        w: key_width,
+                        h: row_height,
+                    };
+                    row_rects.push((rect, k_idx));
+                    current_x += key_width + spacing;
+                }
             }
 
             current_y += row_height + spacing;

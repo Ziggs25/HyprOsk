@@ -680,8 +680,11 @@ impl WaylandState {
 
         match action {
             KeyAction::Text(text) => {
-                for ch in text.chars() {
-                    self.suggest_engine.push_char(ch);
+                let has_command_mods = (self.pending_mods & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                if !has_command_mods {
+                    for ch in text.chars() {
+                        self.suggest_engine.push_char(ch);
+                    }
                 }
                 self.send_text(&text);
                 if !self.caps_lock && self.current_layer == LayerId::Upper {
@@ -764,6 +767,7 @@ impl WaylandState {
                 self.send_tab();
             }
             KeyAction::Escape => {
+                self.suggest_engine.clear();
                 self.send_escape();
             }
             KeyAction::Shift => {
@@ -1206,14 +1210,19 @@ impl PointerHandler for WaylandState {
                     if let Some((action, secondary_label, down_time)) = self.pointer_pending_detail.take() {
                         let elapsed = down_time.elapsed();
                         let is_long_press = elapsed.as_millis() >= 300;
+                        let has_command_mods = (self.pending_mods & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
                         if is_long_press && let Some(sec) = secondary_label {
-                            for ch in sec.chars() {
-                                self.suggest_engine.push_char(ch);
+                            if !has_command_mods {
+                                for ch in sec.chars() {
+                                    self.suggest_engine.push_char(ch);
+                                }
                             }
                             self.send_text(&sec);
                         } else if let KeyAction::Text(primary) = action {
-                            for ch in primary.chars() {
-                                self.suggest_engine.push_char(ch);
+                            if !has_command_mods {
+                                for ch in primary.chars() {
+                                    self.suggest_engine.push_char(ch);
+                                }
                             }
                             self.send_text(&primary);
                         }
@@ -1301,14 +1310,19 @@ impl TouchHandler for WaylandState {
                 let elapsed = down_time.elapsed();
                 let is_long_press = elapsed.as_millis() >= 300;
 
+                let has_command_mods = (self.pending_mods & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
                 if is_long_press && let Some(sec) = secondary_label {
-                    for ch in sec.chars() {
-                        self.suggest_engine.push_char(ch);
+                    if !has_command_mods {
+                        for ch in sec.chars() {
+                            self.suggest_engine.push_char(ch);
+                        }
                     }
                     self.send_text(&sec);
                 } else if let KeyAction::Text(primary) = action {
-                    for ch in primary.chars() {
-                        self.suggest_engine.push_char(ch);
+                    if !has_command_mods {
+                        for ch in primary.chars() {
+                            self.suggest_engine.push_char(ch);
+                        }
                     }
                     self.send_text(&primary);
                 }
