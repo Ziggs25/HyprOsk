@@ -52,6 +52,7 @@ const KEY_BACKSPACE: u32 = 14;
 const KEY_TAB: u32 = 15;
 const KEY_ENTER: u32 = 28;
 const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTSHIFT: u32 = 42;
 const KEY_LEFTALT: u32 = 56;
 const KEY_SPACE: u32 = 57;
 const KEY_LEFTMETA: u32 = 125; // Win / Super
@@ -454,13 +455,6 @@ impl WaylandState {
         self.sync_mods();
         tracing::info!("pending mods now {:b}", self.pending_mods);
         self.redraw(qh);
-    }
-
-    fn consume_mods(&mut self) {
-        if self.pending_mods != 0 {
-            self.pending_mods = 0;
-            self.sync_mods();
-        }
     }
 
     fn latched_positions(&self) -> Vec<(usize, usize)> {
@@ -1068,12 +1062,44 @@ impl WaylandState {
         if let Some(ref vk) = self.virtual_keyboard {
             let pending = self.pending_mods;
             let depressed = pending | if shift { Self::MOD_SHIFT } else { 0 };
+
             if depressed != 0 {
                 vk.modifiers(depressed, 0, 0, 0);
+
+                // Press down physical modifier keycodes so compositors (Hyprland) and client apps
+                // (GTK, Qt, Chromium, terminals) register actual shortcut combinations
+                // rather than inserting raw characters into input fields.
+                if depressed & Self::MOD_CTRL != 0 {
+                    vk.key(time, KEY_LEFTCTRL, wl_keyboard::KeyState::Pressed.into());
+                }
+                if depressed & Self::MOD_ALT != 0 {
+                    vk.key(time, KEY_LEFTALT, wl_keyboard::KeyState::Pressed.into());
+                }
+                if depressed & Self::MOD_SUPER != 0 {
+                    vk.key(time, KEY_LEFTMETA, wl_keyboard::KeyState::Pressed.into());
+                }
+                if depressed & Self::MOD_SHIFT != 0 {
+                    vk.key(time, KEY_LEFTSHIFT, wl_keyboard::KeyState::Pressed.into());
+                }
             }
+
             vk.key(time, keycode, wl_keyboard::KeyState::Pressed.into());
             vk.key(time, keycode, wl_keyboard::KeyState::Released.into());
+
             if depressed != 0 {
+                if depressed & Self::MOD_SHIFT != 0 {
+                    vk.key(time, KEY_LEFTSHIFT, wl_keyboard::KeyState::Released.into());
+                }
+                if depressed & Self::MOD_SUPER != 0 {
+                    vk.key(time, KEY_LEFTMETA, wl_keyboard::KeyState::Released.into());
+                }
+                if depressed & Self::MOD_ALT != 0 {
+                    vk.key(time, KEY_LEFTALT, wl_keyboard::KeyState::Released.into());
+                }
+                if depressed & Self::MOD_CTRL != 0 {
+                    vk.key(time, KEY_LEFTCTRL, wl_keyboard::KeyState::Released.into());
+                }
+
                 if pending != 0 {
                     self.pending_mods = 0;
                 }
