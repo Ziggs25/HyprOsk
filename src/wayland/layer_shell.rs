@@ -42,7 +42,7 @@ pub fn create_layer_surface(
     let layer_surface = state.layer_shell.create_layer_surface(
         qh,
         surface,
-        Layer::Top,
+        Layer::Overlay,
         Some("hyprosk"),
         None,
     );

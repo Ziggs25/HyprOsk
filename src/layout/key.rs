@@ -49,7 +49,7 @@ pub enum KeyAction {
     None,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Key {
     pub label: String,
     pub secondary_label: Option<String>,

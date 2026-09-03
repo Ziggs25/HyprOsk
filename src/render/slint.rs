@@ -13,7 +13,7 @@ use slint::platform::{
     software_renderer::{PremultipliedRgbaColor, SoftwareRenderer},
     Platform, PlatformError, Renderer, WindowAdapter, WindowEvent,
 };
-use slint::{LogicalSize, ModelRc, PhysicalSize, VecModel, Window};
+use slint::{LogicalSize, Model, ModelRc, PhysicalSize, VecModel, Window};
 
 use crate::layout::KeyboardLayout;
 use crate::layout::key::KeyAction;
@@ -135,6 +135,14 @@ impl Platform for Sp {
     }
 }
 
+#[derive(Clone)]
+struct CachedLayout {
+    layout: KeyboardLayout,
+    width: u32,
+    height: u32,
+    key_coords: Vec<(usize, usize)>,
+}
+
 /// Owns the single Slint platform/adapter/component for the whole daemon.
 pub struct SlintScene {
     adapter: Rc<Adapter>,
@@ -142,9 +150,10 @@ pub struct SlintScene {
     canvas: Vec<PremultipliedRgbaColor>,
     width: u32,
     height: u32,
+    key_model: Rc<VecModel<Key>>,
+    current_keys: Vec<Key>,
+    cached_layout: Option<CachedLayout>,
 }
-
-// Wireframe palette is fixed in `ui/osk.slint`; legacy themes are ignored.
 
 impl SlintScene {
     pub fn new(width: u32, height: u32) -> Result<Self, PlatformError> {
@@ -154,40 +163,44 @@ impl SlintScene {
             .map_err(|e| PlatformError::from(e.to_string()))?;
 
         let ui = OskUi::new()?;
-        ui.set_icon_backspace(svg(BACKSPACE_SVG, "#fff"));
-        ui.set_icon_enter(svg(ENTER_SVG, "#fff"));
-        ui.set_icon_shift(svg(SHIFT_SVG, "#fff"));
-        ui.set_icon_capslock(svg(CAPSLOCK_SVG, "#fff"));
-        ui.set_icon_win(svg(WIN_SVG, "#fff"));
-        ui.set_icon_mic(svg(MIC_SVG, "#fff"));
-        ui.set_icon_arrow_l(svg(ARROW_L_SVG, "#fff"));
-        ui.set_icon_arrow_r(svg(ARROW_R_SVG, "#fff"));
-        ui.set_icon_arrow_u(svg(ARROW_U_SVG, "#fff"));
-        ui.set_icon_arrow_d(svg(ARROW_D_SVG, "#fff"));
-        ui.set_icon_gear(svg(GEAR_SVG, "#fff"));
-        ui.set_icon_palette(svg(PALETTE_SVG, "#fff"));
-        ui.set_icon_dismiss(svg(DISMISS_SVG, "#fff"));
-        ui.set_icon_clipboard(svg(CLIPBOARD_SVG, "#fff"));
-        ui.set_icon_grave(svg(GRAVE_SVG, "#fff"));
-        ui.set_icon_euro(svg(EURO_SVG, "#fff"));
-        ui.set_icon_sterling(svg(STERLING_SVG, "#fff"));
-        ui.set_icon_yen(svg(YEN_SVG, "#fff"));
-        ui.set_icon_cent(svg(CENT_SVG, "#fff"));
-        ui.set_icon_rupee(svg(RUPEE_SVG, "#fff"));
-        ui.set_icon_section(svg(SECTION_SVG, "#fff"));
-        ui.set_icon_plusminus(svg(PLUSMINUS_SVG, "#fff"));
-        ui.set_icon_multiply(svg(MULTIPLY_SVG, "#fff"));
-        ui.set_icon_divide(svg(DIVIDE_SVG, "#fff"));
-        ui.set_icon_notequal(svg(NOTEQUAL_SVG, "#fff"));
-        ui.set_icon_degree(svg(DEGREE_SVG, "#fff"));
-        ui.set_icon_bullet(svg(BULLET_SVG, "#fff"));
-        ui.set_icon_copyright(svg(COPYRIGHT_SVG, "#fff"));
-        ui.set_icon_registered(svg(REGISTERED_SVG, "#fff"));
-        ui.set_icon_trademark(svg(TRADEMARK_SVG, "#fff"));
-        ui.set_icon_guillemotleft(svg(GUILLEMOTLEFT_SVG, "#fff"));
-        ui.set_icon_guillemotright(svg(GUILLEMOTRIGHT_SVG, "#fff"));
-        ui.set_icon_questiondown(svg(QUESTIONDOWN_SVG, "#fff"));
-        ui.set_icon_pin(svg(PIN_SVG, "#89b4fa"));
+        let icons = ui.global::<OskIcons>();
+        icons.set_backspace(svg(BACKSPACE_SVG, "#fff"));
+        icons.set_enter(svg(ENTER_SVG, "#fff"));
+        icons.set_shift(svg(SHIFT_SVG, "#fff"));
+        icons.set_capslock(svg(CAPSLOCK_SVG, "#fff"));
+        icons.set_win(svg(WIN_SVG, "#fff"));
+        icons.set_mic(svg(MIC_SVG, "#fff"));
+        icons.set_arrow_l(svg(ARROW_L_SVG, "#fff"));
+        icons.set_arrow_r(svg(ARROW_R_SVG, "#fff"));
+        icons.set_arrow_u(svg(ARROW_U_SVG, "#fff"));
+        icons.set_arrow_d(svg(ARROW_D_SVG, "#fff"));
+        icons.set_gear(svg(GEAR_SVG, "#fff"));
+        icons.set_palette(svg(PALETTE_SVG, "#fff"));
+        icons.set_dismiss(svg(DISMISS_SVG, "#fff"));
+        icons.set_clipboard(svg(CLIPBOARD_SVG, "#fff"));
+        icons.set_grave(svg(GRAVE_SVG, "#fff"));
+        icons.set_euro(svg(EURO_SVG, "#fff"));
+        icons.set_sterling(svg(STERLING_SVG, "#fff"));
+        icons.set_yen(svg(YEN_SVG, "#fff"));
+        icons.set_cent(svg(CENT_SVG, "#fff"));
+        icons.set_rupee(svg(RUPEE_SVG, "#fff"));
+        icons.set_section(svg(SECTION_SVG, "#fff"));
+        icons.set_plusminus(svg(PLUSMINUS_SVG, "#fff"));
+        icons.set_multiply(svg(MULTIPLY_SVG, "#fff"));
+        icons.set_divide(svg(DIVIDE_SVG, "#fff"));
+        icons.set_notequal(svg(NOTEQUAL_SVG, "#fff"));
+        icons.set_degree(svg(DEGREE_SVG, "#fff"));
+        icons.set_bullet(svg(BULLET_SVG, "#fff"));
+        icons.set_copyright(svg(COPYRIGHT_SVG, "#fff"));
+        icons.set_registered(svg(REGISTERED_SVG, "#fff"));
+        icons.set_trademark(svg(TRADEMARK_SVG, "#fff"));
+        icons.set_guillemotleft(svg(GUILLEMOTLEFT_SVG, "#fff"));
+        icons.set_guillemotright(svg(GUILLEMOTRIGHT_SVG, "#fff"));
+        icons.set_questiondown(svg(QUESTIONDOWN_SVG, "#fff"));
+        icons.set_pin(svg(PIN_SVG, "#89b4fa"));
+
+        let key_model = Rc::new(VecModel::default());
+        ui.set_keys(ModelRc::from(key_model.clone()));
 
         ui.show()?;
         ui.window().dispatch_event(WindowEvent::Resized {
@@ -200,6 +213,9 @@ impl SlintScene {
             canvas: Vec::with_capacity((width * height) as usize),
             width,
             height,
+            key_model,
+            current_keys: Vec::new(),
+            cached_layout: None,
         })
     }
 
@@ -268,55 +284,98 @@ impl SlintScene {
         hold_preview: Option<HoldPreview>,
         out_shm: &mut [u8],
     ) -> bool {
-        // Re-create the rect geometry from the Rust layout (single source of truth).
-        let rects = RenderEngine::calculate_key_rects(layout, width, height, theme);
+        let needs_rebuild = match &self.cached_layout {
+            Some(cached) => {
+                cached.width != width || cached.height != height || &cached.layout != layout
+            }
+            None => true,
+        };
 
-        // Flatten rows and build the Slint key model.
-        let mut keys = Vec::new();
-        let mut pressed_index: i32 = -1;
-        let mut flat = 0i32;
-        for (r_idx, row) in rects.iter().enumerate() {
-            for (rect, key_idx) in row.iter() {
-                let k_idx = *key_idx;
-                let Some(key) = layout.rows.get(r_idx).and_then(|r| r.keys.get(k_idx)) else {
-                    continue;
-                };
-                let icon = Self::icon_for(&key.action, &key.label);
-                let is_active = pressed_keys.contains(&(r_idx, k_idx)) || latched_keys.contains(&(r_idx, k_idx));
-                if is_active && pressed_index == -1 {
-                    pressed_index = flat;
-                }
-                keys.push(Key {
-                    x: rect.x,
-                    y: rect.y,
-                    w: rect.w,
-                    h: rect.h,
-                    label: (if icon > 0 || matches!(key.action, KeyAction::Space) {
+        if needs_rebuild {
+            let rects = RenderEngine::calculate_key_rects(layout, width, height, theme);
+            let mut keys = Vec::new();
+            let mut key_coords = Vec::new();
+
+            for (r_idx, row) in rects.iter().enumerate() {
+                for (rect, key_idx) in row.iter() {
+                    let k_idx = *key_idx;
+                    let Some(key) = layout.rows.get(r_idx).and_then(|r| r.keys.get(k_idx)) else {
+                        continue;
+                    };
+                    let icon = Self::icon_for(&key.action, &key.label);
+                    let is_space = matches!(key.action, KeyAction::Space);
+                    let is_active = pressed_keys.contains(&(r_idx, k_idx)) || latched_keys.contains(&(r_idx, k_idx));
+
+                    let key_type = if key.is_clipboard {
+                        if key.label == "Clipboard History" {
+                            KeyType::ClipboardHeader
+                        } else if key.label == "◀ Back" {
+                            KeyType::ClipboardBack
+                        } else {
+                            KeyType::ClipboardItem
+                        }
+                    } else if key.is_suggestion {
+                        KeyType::Suggestion
+                    } else if is_space {
+                        KeyType::Space
+                    } else {
+                        KeyType::Standard
+                    };
+
+                    let label_str = if icon > 0 || is_space {
                         ""
                     } else {
                         key.label.as_str()
-                    })
-                    .into(),
-                    sub: key.secondary_label.clone().unwrap_or_default().into(),
-                    icon,
-                    is_pressed: is_active,
-                    is_suggestion: key.is_suggestion,
-                    is_functional: key.is_special,
-                    is_space: matches!(key.action, KeyAction::Space),
-                    is_clipboard: key.is_clipboard,
-                    is_pinned: key.is_pinned,
-                });
-                flat += 1;
+                    };
+
+                    keys.push(Key {
+                        x: rect.x,
+                        y: rect.y,
+                        w: rect.w,
+                        h: rect.h,
+                        label: label_str.into(),
+                        sub: key.secondary_label.clone().unwrap_or_default().into(),
+                        icon,
+                        key_type,
+                        is_pressed: is_active,
+                        is_functional: key.is_special,
+                        is_pinned: key.is_pinned,
+                    });
+                    key_coords.push((r_idx, k_idx));
+                }
+            }
+
+            let show_clipboard = keys.iter().any(|k| {
+                matches!(
+                    k.key_type,
+                    KeyType::ClipboardHeader | KeyType::ClipboardBack | KeyType::ClipboardItem
+                )
+            });
+            self.ui.set_show_clipboard(show_clipboard);
+
+            self.current_keys = keys.clone();
+            self.key_model.set_vec(keys);
+            self.cached_layout = Some(CachedLayout {
+                layout: layout.clone(),
+                width,
+                height,
+                key_coords,
+            });
+        } else {
+            // Layout geometry is unchanged. Zero allocations: only update is_pressed for changed keys.
+            let key_coords = &self.cached_layout.as_ref().unwrap().key_coords;
+            for (flat_idx, &(r_idx, k_idx)) in key_coords.iter().enumerate() {
+                let is_active = pressed_keys.contains(&(r_idx, k_idx)) || latched_keys.contains(&(r_idx, k_idx));
+                if self.current_keys[flat_idx].is_pressed != is_active {
+                    self.current_keys[flat_idx].is_pressed = is_active;
+                    self.key_model.set_row_data(flat_idx, self.current_keys[flat_idx].clone());
+                }
             }
         }
-        let show_clipboard = keys.iter().any(|k| k.is_clipboard);
 
         // Let animations/timers tick before rendering the frame.
         slint::platform::update_timers_and_animations();
 
-        self.ui.set_keys(ModelRc::new(VecModel::from(keys)));
-        self.ui.set_pressed_index(pressed_index);
-        self.ui.set_show_clipboard(show_clipboard);
         if let Some(preview) = hold_preview {
             self.ui.set_hold_preview_visible(true);
             self.ui.set_hold_preview_label(preview.label.into());
@@ -324,26 +383,24 @@ impl SlintScene {
             self.ui.set_hold_preview_y(preview.y);
             self.ui.set_hold_preview_w(preview.w);
             self.ui.set_hold_preview_h(preview.h);
-        } else {
+        } else if self.ui.get_hold_preview_visible() {
             self.ui.set_hold_preview_visible(false);
         }
+
         if width != self.width || height != self.height {
             self.width = width;
             self.height = height;
+            self.adapter.size.set(PhysicalSize::new(width, height));
+            self.ui.window().dispatch_event(WindowEvent::Resized {
+                size: LogicalSize::new(width as f32, height as f32),
+            });
         }
-        self.adapter.size.set(PhysicalSize::new(width, height));
-        self.ui.window().dispatch_event(WindowEvent::Resized {
-            size: LogicalSize::new(width as f32, height as f32),
-        });
 
-        // Wireframe palette is fixed in `ui/osk.slint`; legacy themes are ignored.
         self.canvas
             .resize((width * height) as usize, PremultipliedRgbaColor::default());
         self.adapter.renderer.render(&mut self.canvas, width as usize);
 
         for (dst, src_px) in premul_chunks(out_shm, width, height).iter_mut().zip(self.canvas.iter()) {
-            // ARGB8888 (native endian): memory bytes are B,G,R,A on LE, and the
-            // Slint software renderer yields premultiplied R,G,B,A.
             *dst = (src_px.blue as u32)
                 | ((src_px.green as u32) << 8)
                 | ((src_px.red as u32) << 16)

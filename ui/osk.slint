@@ -1,5 +1,14 @@
 import "fonts/DejaVuSans.ttf";
 
+export enum KeyType {
+    standard,
+    space,
+    suggestion,
+    clipboard-header,
+    clipboard-back,
+    clipboard-item,
+}
+
 export struct Key {
     x: length,
     y: length,
@@ -8,42 +17,120 @@ export struct Key {
     label: string,
     sub: string,
     icon: int,
+    key-type: KeyType,
     is-pressed: bool,
-    is-suggestion: bool,
     is-functional: bool,
-    is-space: bool,
-    is-clipboard: bool,
     is-pinned: bool,
+}
+
+export global OskTheme {
+    in-out property <color> dock-bg: #000000;
+    in-out property <color> clipboard-bg: #111111;
+    in-out property <color> key-bg: #1c1c1c;
+    in-out property <color> key-bg-pressed: #141414;
+    in-out property <color> text-color: #fff;
+    in-out property <color> sub-color: #8c8c8c;
+    in-out property <color> suggest-bg: rgba(255, 255, 255, 0.05);
+    in-out property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
+    in-out property <length> suggest-text-size: 21px;
+    in-out property <length> label-size: 27px;
+    in-out property <length> sub-size: 14px;
+    in-out property <length> icon-size: 24px;
+    in-out property <length> pin-size: 14px;
+    in-out property <length> key-radius: 16px;
+    in-out property <length> space-radius: 20px;
+}
+
+export global OskIcons {
+    in-out property <image> backspace;
+    in-out property <image> enter;
+    in-out property <image> shift;
+    in-out property <image> capslock;
+    in-out property <image> win;
+    in-out property <image> mic;
+    in-out property <image> arrow-l;
+    in-out property <image> arrow-r;
+    in-out property <image> arrow-u;
+    in-out property <image> arrow-d;
+    in-out property <image> gear;
+    in-out property <image> palette;
+    in-out property <image> dismiss;
+    in-out property <image> clipboard;
+    in-out property <image> grave;
+    in-out property <image> euro;
+    in-out property <image> sterling;
+    in-out property <image> yen;
+    in-out property <image> cent;
+    in-out property <image> rupee;
+    in-out property <image> section;
+    in-out property <image> plusminus;
+    in-out property <image> multiply;
+    in-out property <image> divide;
+    in-out property <image> notequal;
+    in-out property <image> degree;
+    in-out property <image> bullet;
+    in-out property <image> copyright;
+    in-out property <image> registered;
+    in-out property <image> trademark;
+    in-out property <image> guillemotleft;
+    in-out property <image> guillemotright;
+    in-out property <image> questiondown;
+    in-out property <image> pin;
+
+    public pure function get(code: int) -> image {
+        if (code == 1) { return backspace; }
+        if (code == 2) { return enter; }
+        if (code == 3) { return shift; }
+        if (code == 34) { return capslock; }
+        if (code == 4) { return win; }
+        if (code == 5) { return mic; }
+        if (code == 6) { return arrow-l; }
+        if (code == 7) { return arrow-r; }
+        if (code == 8) { return arrow-u; }
+        if (code == 9) { return arrow-d; }
+        if (code == 10) { return gear; }
+        if (code == 11) { return palette; }
+        if (code == 12) { return dismiss; }
+        if (code == 13) { return clipboard; }
+        if (code == 14) { return grave; }
+        if (code == 15) { return euro; }
+        if (code == 16) { return sterling; }
+        if (code == 17) { return yen; }
+        if (code == 18) { return cent; }
+        if (code == 19) { return rupee; }
+        if (code == 20) { return section; }
+        if (code == 21) { return plusminus; }
+        if (code == 22) { return multiply; }
+        if (code == 23) { return divide; }
+        if (code == 24) { return notequal; }
+        if (code == 25) { return degree; }
+        if (code == 26) { return bullet; }
+        if (code == 27) { return copyright; }
+        if (code == 28) { return registered; }
+        if (code == 29) { return trademark; }
+        if (code == 30) { return guillemotleft; }
+        if (code == 31) { return guillemotright; }
+        if (code == 32) { return questiondown; }
+        return pin;
+    }
 }
 
 component KeyVisual {
     in property <Key> k;
-    in property <int> pressed-index: -1;
-    in property <length> key-radius: 16px;
-    in property <length> space-radius: 20px;
-    in property <color> key-bg: #1c1c1c;
-    in property <color> key-bg-pressed: #141414;
-    in property <color> suggest-bg: rgba(255, 255, 255, 0.05);
-    in property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
-    in property <color> text-color: #fff;
-    in property <color> sub-color: #8c8c8c;
-    in property <length> suggest-text-size: 21px;
-    in property <image> icon-img;
-    in property <image> icon-pin;
-    in property <length> label-size: 27px;
-    in property <length> sub-size: 14px;
-    in property <length> icon-size: 24px;
-    in property <length> pin-size: 14px;
 
     width: k.w;
     height: k.h;
     x: k.x;
     y: k.y;
 
-    visible: !(k.is-suggestion && k.label == "");
-    opacity: k.is-suggestion && k.label == "" ? 0.0 : 1.0;
+    property <bool> is-clipboard: k.key-type == KeyType.clipboard-header
+                                || k.key-type == KeyType.clipboard-back
+                                || k.key-type == KeyType.clipboard-item;
 
-    if k.is-clipboard && k.label == "Clipboard History" : Rectangle {
+    visible: !(k.key-type == KeyType.suggestion && k.label == "");
+    opacity: (k.key-type == KeyType.suggestion && k.label == "") ? 0.0 : 1.0;
+
+    if k.key-type == KeyType.clipboard-header : Rectangle {
         background: transparent;
         Text {
             x: 0; y: 0; width: parent.width - 30px; height: parent.height;
@@ -57,12 +144,13 @@ component KeyVisual {
         Image {
             x: parent.width - 22px; y: (parent.height - 16px) / 2;
             width: 16px; height: 16px;
-            source: icon-pin;
+            source: OskIcons.pin;
             colorize: #89b4fa;
             visible: false;
         }
     }
-    if k.is-clipboard && k.label == "◀ Back" : Rectangle {
+
+    if k.key-type == KeyType.clipboard-back : Rectangle {
         background: k.is-pressed ? #333333 : #222222;
         border-radius: 12px;
         Text {
@@ -75,12 +163,13 @@ component KeyVisual {
             vertical-alignment: center;
         }
     }
-    if k.is-clipboard && k.label != "Clipboard History" && k.label != "◀ Back" : Rectangle {
+
+    if k.key-type == KeyType.clipboard-item : Rectangle {
         x: k.is-pressed ? 1px : 0px;
         y: k.is-pressed ? 1px : 0px;
         width: k.w - (k.is-pressed ? 2px : 0px);
         height: k.h - (k.is-pressed ? 2px : 0px);
-        background: k.is-pressed ? #141414 : #1c1c1c;
+        background: k.is-pressed ? OskTheme.key-bg-pressed : OskTheme.key-bg;
         border-radius: 14px;
         Text {
             x: 10px; y: 8px; width: parent.width - 20px; height: parent.height - 16px;
@@ -93,58 +182,60 @@ component KeyVisual {
         }
         Image {
             visible: k.is-pinned;
-            x: parent.width - 18px; y: 8px; width: pin-size; height: pin-size;
-            source: icon-pin;
+            x: parent.width - 18px; y: 8px; width: OskTheme.pin-size; height: OskTheme.pin-size;
+            source: OskIcons.pin;
             colorize: #89b4fa;
         }
     }
-    if !k.is-clipboard : Rectangle {
+
+    if !root.is-clipboard : Rectangle {
         x: k.is-pressed ? 2px : 0px;
         y: k.is-pressed ? 2px : 0px;
         width: k.w - (k.is-pressed ? 4px : 0px);
         height: k.h - (k.is-pressed ? 4px : 0px);
-        background: k.is-suggestion
-            ? (k.is-pressed ? suggest-bg-pressed : suggest-bg)
-            : (k.icon == 34 ? #363a4f : (k.is-pressed ? #313244 : key-bg));
+        background: k.key-type == KeyType.suggestion
+            ? (k.is-pressed ? OskTheme.suggest-bg-pressed : OskTheme.suggest-bg)
+            : (k.icon == 34 ? #363a4f : (k.is-pressed ? OskTheme.key-bg-pressed : OskTheme.key-bg));
         border-color: k.icon == 34 ? #89b4fa : (k.is-pressed ? #585b70 : transparent);
         border-width: (k.icon == 34 || k.is-pressed) ? 1.5px : 0px;
-        border-radius: k.is-suggestion ? 8px : (k.is-space ? space-radius : key-radius);
+        border-radius: k.key-type == KeyType.suggestion ? 8px : (k.key-type == KeyType.space ? OskTheme.space-radius : OskTheme.key-radius);
+
         Image {
-            visible: k.icon > 0 && !k.is-suggestion;
-            x: (parent.width - icon-size) / 2;
-            y: (parent.height - icon-size) / 2;
-            width: icon-size;
-            height: icon-size;
-            source: icon-img;
+            visible: k.icon > 0 && k.key-type != KeyType.suggestion;
+            x: (parent.width - OskTheme.icon-size) / 2;
+            y: (parent.height - OskTheme.icon-size) / 2;
+            width: OskTheme.icon-size;
+            height: OskTheme.icon-size;
+            source: OskIcons.get(k.icon);
             colorize: (k.icon == 34 || k.is-pressed) ? #89b4fa : #ffffff;
             image-fit: contain;
         }
         Text {
-            visible: k.icon <= 0 && !k.is-suggestion;
+            visible: k.icon <= 0 && k.key-type != KeyType.suggestion;
             x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
-            font-size: k.is-functional ? 21px : label-size;
+            font-size: k.is-functional ? 21px : OskTheme.label-size;
             font-weight: 400;
-            color: text-color;
+            color: OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         Text {
-            visible: k.is-suggestion;
+            visible: k.key-type == KeyType.suggestion;
             x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
-            font-size: suggest-text-size;
+            font-size: OskTheme.suggest-text-size;
             font-weight: 500;
-            color: text-color;
+            color: OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         Text {
-            visible: !k.is-suggestion && k.sub != "";
+            visible: k.key-type != KeyType.suggestion && k.sub != "";
             x: 10px; y: 6px; width: 40px; height: 18px;
             text: k.sub;
-            font-size: sub-size;
-            color: sub-color;
+            font-size: OskTheme.sub-size;
+            color: OskTheme.sub-color;
         }
     }
 }
@@ -154,8 +245,7 @@ export component OskUi inherits Window {
     default-font-size: 27px;
     background: transparent;
 
-    in property <[Key]> keys;
-    in property <int> pressed-index: -1;
+    in-out property <[Key]> keys;
     in property <bool> show-clipboard: false;
     in property <bool> hold-preview-visible: false;
     in property <string> hold-preview-label: "";
@@ -164,120 +254,22 @@ export component OskUi inherits Window {
     in property <length> hold-preview-w;
     in property <length> hold-preview-h;
 
-    in property <length> key-gap: 8px;
-    in property <length> key-radius: 16px;
-    in property <length> space-radius: 20px;
-    in property <color> dock-bg: #000000;
-    in property <color> clipboard-bg: #111111;
-    in property <color> key-bg: #1c1c1c;
-    in property <color> key-bg-pressed: #141414;
-    in property <color> text-color: #fff;
-    in property <color> sub-color: #8c8c8c;
-    in property <color> suggest-bg: rgba(255, 255, 255, 0.05);
-    in property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
-    in property <length> suggest-text-size: 21px;
-    in property <length> label-size: 27px;
-    in property <length> sub-size: 14px;
-    in property <length> icon-size: 24px;
-
-    in property <image> icon-backspace;
-    in property <image> icon-enter;
-    in property <image> icon-shift;
-    in property <image> icon-capslock;
-    in property <image> icon-win;
-    in property <image> icon-mic;
-    in property <image> icon-arrow-l;
-    in property <image> icon-arrow-r;
-    in property <image> icon-arrow-u;
-    in property <image> icon-arrow-d;
-    in property <image> icon-gear;
-    in property <image> icon-palette;
-    in property <image> icon-dismiss;
-    in property <image> icon-clipboard;
-    in property <image> icon-grave;
-    in property <image> icon-euro;
-    in property <image> icon-sterling;
-    in property <image> icon-yen;
-    in property <image> icon-cent;
-    in property <image> icon-rupee;
-    in property <image> icon-section;
-    in property <image> icon-plusminus;
-    in property <image> icon-multiply;
-    in property <image> icon-divide;
-    in property <image> icon-notequal;
-    in property <image> icon-degree;
-    in property <image> icon-bullet;
-    in property <image> icon-copyright;
-    in property <image> icon-registered;
-    in property <image> icon-trademark;
-    in property <image> icon-guillemotleft;
-    in property <image> icon-guillemotright;
-    in property <image> icon-questiondown;
-    in property <image> icon-pin;
-
     Rectangle {
-        background: dock-bg;
+        background: OskTheme.dock-bg;
     }
+
     Rectangle {
         visible: root.show-clipboard;
         x: 8px;
         y: 62px;
         width: parent.width - 16px;
         height: parent.height - 70px;
-        background: clipboard-bg;
+        background: OskTheme.clipboard-bg;
         border-radius: 14px;
     }
 
-    for k[i] in keys: KeyVisual {
+    for k in keys: KeyVisual {
         k: k;
-        pressed-index: root.pressed-index;
-        key-radius: root.key-radius;
-        space-radius: root.space-radius;
-        key-bg: root.key-bg;
-        key-bg-pressed: root.key-bg-pressed;
-        text-color: root.text-color;
-        sub-color: root.sub-color;
-        suggest-bg: root.suggest-bg;
-        suggest-bg-pressed: root.suggest-bg-pressed;
-        suggest-text-size: root.suggest-text-size;
-        label-size: root.label-size;
-        sub-size: root.sub-size;
-        icon-size: root.icon-size;
-        icon-img: k.icon == 1 ? root.icon-backspace
-                : k.icon == 2 ? root.icon-enter
-                : k.icon == 3 ? root.icon-shift
-                : k.icon == 34 ? root.icon-capslock
-                : k.icon == 4 ? root.icon-win
-                : k.icon == 5 ? root.icon-mic
-                : k.icon == 6 ? root.icon-arrow-l
-                : k.icon == 7 ? root.icon-arrow-r
-                : k.icon == 8 ? root.icon-arrow-u
-                : k.icon == 9 ? root.icon-arrow-d
-                : k.icon == 10 ? root.icon-gear
-                : k.icon == 11 ? root.icon-palette
-                : k.icon == 12 ? root.icon-dismiss
-                : k.icon == 13 ? root.icon-clipboard
-                : k.icon == 14 ? root.icon-grave
-                : k.icon == 15 ? root.icon-euro
-                : k.icon == 16 ? root.icon-sterling
-                : k.icon == 17 ? root.icon-yen
-                : k.icon == 18 ? root.icon-cent
-                : k.icon == 19 ? root.icon-rupee
-                : k.icon == 20 ? root.icon-section
-                : k.icon == 21 ? root.icon-plusminus
-                : k.icon == 22 ? root.icon-multiply
-                : k.icon == 23 ? root.icon-divide
-                : k.icon == 24 ? root.icon-notequal
-                : k.icon == 25 ? root.icon-degree
-                : k.icon == 26 ? root.icon-bullet
-                : k.icon == 27 ? root.icon-copyright
-                : k.icon == 28 ? root.icon-registered
-                : k.icon == 29 ? root.icon-trademark
-                : k.icon == 30 ? root.icon-guillemotleft
-                : k.icon == 31 ? root.icon-guillemotright
-                : k.icon == 32 ? root.icon-questiondown
-                : root.icon-pin;
-        icon-pin: root.icon-pin;
     }
 
     Rectangle {

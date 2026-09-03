@@ -1,11 +1,11 @@
 use crate::layout::key::{Key, KeyAction, LayerId};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KeyboardRow {
     pub keys: Vec<Key>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KeyboardLayout {
     pub rows: Vec<KeyboardRow>,
     pub id: LayerId,
