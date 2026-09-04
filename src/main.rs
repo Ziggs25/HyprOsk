@@ -63,6 +63,16 @@ enum Commands {
     Status,
     /// Stop the running HyprOsk daemon
     Quit,
+    /// Compile an AOSP .combined wordlist into a fast binary .hyprosk.dict file
+    CompileDict {
+        /// Path to the input .combined wordlist
+        input: PathBuf,
+        /// Path to the output .hyprosk.dict binary file
+        output: PathBuf,
+        /// Maximum words to include (default: 55000)
+        #[arg(long, default_value = "55000")]
+        max_words: usize,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -147,6 +157,12 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Quit) => {
             let resp = hyprosk::ipc::IpcServer::send_command("quit")?;
             println!("{}", resp.trim());
+        }
+        Some(Commands::CompileDict { input, output, max_words }) => {
+            println!("Compiling {:?} -> {:?} (max {} words)...", input, output, max_words);
+            let (words, bigrams, size) = hyprosk::suggest::compiler::compile_combined(&input, &output, max_words, 3)?;
+            println!("Success! Compiled {} words and {} bigrams into binary dictionary ({:.2} MB).",
+                words, bigrams, size as f64 / (1024.0 * 1024.0));
         }
     }
 

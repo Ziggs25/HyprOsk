@@ -167,7 +167,13 @@ impl Dictionary {
             if !w.starts_with(&prefix_lower) {
                 break;
             }
-            collector.insert(w, entry.freq as u32);
+            // Exact full-word match gets priority over longer prefix completions
+            let score = if w == prefix_lower {
+                (entry.freq as u32) + 2000
+            } else {
+                entry.freq as u32
+            };
+            collector.insert(w, score);
         }
 
         // 4. Fallback search if fewer than 3 candidates:
@@ -298,7 +304,77 @@ impl Dictionary {
         self.user_dict.flush_if_dirty();
     }
 
+    pub fn load_binary_corpus(&mut self, data: &[u8]) -> Result<(), &'static str> {
+        if data.len() < 32 {
+            return Err("Binary dictionary too small");
+        }
+        if &data[0..8] != b"HYPROSK\0" {
+            return Err("Invalid dictionary magic");
+        }
+        let version = u32::from_le_bytes(data[8..12].try_into().unwrap());
+        if version != 1 {
+            return Err("Unsupported dictionary version");
+        }
+        let word_count = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
+        let bigram_count = u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
+        let string_pool_len = u32::from_le_bytes(data[20..24].try_into().unwrap()) as usize;
+
+        let str_start = 32;
+        let str_end = str_start + string_pool_len;
+        if data.len() < str_end {
+            return Err("Truncated string pool");
+        }
+        let str_blob = std::str::from_utf8(&data[str_start..str_end]).map_err(|_| "Invalid UTF-8 in string pool")?;
+
+        let unigram_start = str_end;
+        let unigram_end = unigram_start + word_count * 8;
+        if data.len() < unigram_end {
+            return Err("Truncated unigram table");
+        }
+
+        let mut unigrams = Vec::with_capacity(word_count);
+        for i in 0..word_count {
+            let offset_pos = unigram_start + i * 8;
+            let offset = u32::from_le_bytes(data[offset_pos..offset_pos + 4].try_into().unwrap());
+            let len = u16::from_le_bytes(data[offset_pos + 4..offset_pos + 6].try_into().unwrap());
+            let freq = u16::from_le_bytes(data[offset_pos + 6..offset_pos + 8].try_into().unwrap());
+            unigrams.push(UnigramEntry { offset, len, freq });
+        }
+
+        let bigram_start = unigram_end;
+        let bigram_end = bigram_start + bigram_count * 10;
+        if data.len() < bigram_end {
+            return Err("Truncated bigram table");
+        }
+
+        let mut bigrams = Vec::with_capacity(bigram_count);
+        for i in 0..bigram_count {
+            let b_pos = bigram_start + i * 10;
+            let src_idx = u32::from_le_bytes(data[b_pos..b_pos + 4].try_into().unwrap());
+            let dst_idx = u32::from_le_bytes(data[b_pos + 4..b_pos + 8].try_into().unwrap());
+            let freq = u16::from_le_bytes(data[b_pos + 8..b_pos + 10].try_into().unwrap());
+            bigrams.push(BigramEntry { src_idx, dst_idx, freq });
+        }
+
+        self.words_blob = str_blob.to_string();
+        self.unigrams = unigrams;
+        self.bigrams = bigrams;
+        Ok(())
+    }
+
     fn load_default_corpus(&mut self) {
+        // 1. Try pre-compiled HeliBoard AOSP binary dictionary (zero runtime overhead)
+        static EMBEDDED_DICT: &[u8] = include_bytes!("../../assets/en_us.hyprosk.dict");
+        if self.load_binary_corpus(EMBEDDED_DICT).is_ok() {
+            tracing::info!(
+                "Loaded HeliBoard AOSP binary dictionary: {} words, {} bigrams",
+                self.unigrams.len(),
+                self.bigrams.len()
+            );
+            return;
+        }
+
+        // 2. Fallback to google-10000 text list if needed
         let raw_wordlist = if let Ok(c) = std::fs::read_to_string("assets/google-10000-english.txt") {
             c
         } else {
@@ -441,5 +517,35 @@ impl Dictionary {
         self.bigrams.sort_by(|a, b| {
             a.src_idx.cmp(&b.src_idx).then_with(|| b.freq.cmp(&a.freq))
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_heliboard_binary_dictionary_loading() {
+        let dict = Dictionary::new_empty();
+        assert_eq!(dict.unigrams.len(), 55000);
+        assert!(dict.bigrams.len() >= 100_000);
+
+        // Test prefix completion on HeliBoard corpus
+        let comps = dict.find_completions("cant", 4);
+        assert!(!comps.is_empty());
+        assert_eq!(comps[0].0, "can't");
+
+        let comps = dict.find_completions("dont", 4);
+        assert!(!comps.is_empty());
+        assert_eq!(comps[0].0, "don't");
+
+        let comps = dict.find_completions("omw", 4);
+        assert!(!comps.is_empty());
+        assert_eq!(comps[0].0, "on my way");
+
+        // Test bigram prediction
+        let next = dict.predict_next_words("how", 3);
+        assert!(!next.is_empty());
+        assert!(next.iter().any(|(w, _)| w == "are" || w == "do" || w == "many" || w == "is"));
     }
 }
