@@ -51,21 +51,13 @@ impl KeyboardLayout {
         keys.push(Key::new("gear", KeyAction::None).with_weight(action_weight).special());
         keys.push(Key::new("palette", KeyAction::None).with_weight(action_weight).special());
 
-        let count = suggestions.len().min(3);
-        if count == 0 {
-            for idx in 0..3 {
-                keys.push(Key::suggestion(idx, ""));
-            }
-        } else if count == 1 {
-            keys.push(Key::suggestion(0, &suggestions[0]).with_weight(1.0));
-        } else if count == 2 {
-            keys.push(Key::suggestion(0, &suggestions[0]).with_weight(1.0));
-            keys.push(Key::suggestion(1, &suggestions[1]).with_weight(1.0));
-        } else {
-            keys.push(Key::suggestion(0, &suggestions[0]).with_weight(1.0));
-            keys.push(Key::suggestion(1, &suggestions[1]).with_weight(1.3));
-            keys.push(Key::suggestion(2, &suggestions[2]).with_weight(1.0));
-        }
+        let s0 = suggestions.get(0).map(|s| s.as_str()).unwrap_or("");
+        let s1 = suggestions.get(1).map(|s| s.as_str()).unwrap_or("");
+        let s2 = suggestions.get(2).map(|s| s.as_str()).unwrap_or("");
+
+        keys.push(Key::suggestion(0, s0).with_weight(1.0));
+        keys.push(Key::suggestion(1, s1).with_weight(1.3));
+        keys.push(Key::suggestion(2, s2).with_weight(1.0));
 
         keys.push(Key::new("", KeyAction::Clipboard).with_weight(action_weight).special());
         keys.push(Key::new("", KeyAction::Hide).with_weight(action_weight).special());

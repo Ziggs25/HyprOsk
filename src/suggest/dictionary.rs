@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::suggest::user_dict::{find_shortcut_details, UserDictionary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnigramEntry {
@@ -19,12 +20,57 @@ pub struct Dictionary {
     words_blob: String,
     unigrams: Vec<UnigramEntry>,
     bigrams: Vec<BigramEntry>,
-    user_bigrams: HashMap<(String, String), u32>,
+    pub user_dict: UserDictionary,
 }
 
 impl Default for Dictionary {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+struct TopCollector<'a> {
+    cap: usize,
+    items: [(&'a str, u32); 8],
+    count: usize,
+}
+
+impl<'a> TopCollector<'a> {
+    #[inline]
+    fn new(cap: usize) -> Self {
+        Self {
+            cap: cap.min(8),
+            items: [("", 0); 8],
+            count: 0,
+        }
+    }
+
+    #[inline]
+    fn insert(&mut self, word: &'a str, score: u32) {
+        for i in 0..self.count {
+            if self.items[i].0.eq_ignore_ascii_case(word) {
+                if score > self.items[i].1 {
+                    self.items[i].1 = score;
+                }
+                return;
+            }
+        }
+        if self.count < self.cap {
+            self.items[self.count] = (word, score);
+            self.count += 1;
+            let mut j = self.count - 1;
+            while j > 0 && self.items[j].1 > self.items[j - 1].1 {
+                self.items.swap(j, j - 1);
+                j -= 1;
+            }
+        } else if score > self.items[self.cap - 1].1 {
+            self.items[self.cap - 1] = (word, score);
+            let mut j = self.cap - 1;
+            while j > 0 && self.items[j].1 > self.items[j - 1].1 {
+                self.items.swap(j, j - 1);
+                j -= 1;
+            }
+        }
     }
 }
 
@@ -34,7 +80,19 @@ impl Dictionary {
             words_blob: String::with_capacity(96 * 1024),
             unigrams: Vec::with_capacity(10000),
             bigrams: Vec::with_capacity(2000),
-            user_bigrams: HashMap::new(),
+            user_dict: UserDictionary::new(),
+        };
+        dict.load_default_corpus();
+        dict
+    }
+
+    /// Creates a dictionary with empty user dictionary (isolated from disk).
+    pub fn new_empty() -> Self {
+        let mut dict = Self {
+            words_blob: String::with_capacity(96 * 1024),
+            unigrams: Vec::with_capacity(10000),
+            bigrams: Vec::with_capacity(2000),
+            user_dict: UserDictionary::new_empty(),
         };
         dict.load_default_corpus();
         dict
@@ -64,6 +122,8 @@ impl Dictionary {
         words
     }
 
+    /// Fast, zero-heap-allocation prefix scanning on hot path.
+    /// Combines shortcut expansions, user history, and base vocabulary.
     pub fn find_completions(&self, prefix: &str, limit: usize) -> Vec<(String, u32)> {
         if prefix.is_empty() {
             return Vec::new();
@@ -71,6 +131,24 @@ impl Dictionary {
         let prefix_lower = prefix.to_lowercase();
         let prefix_bytes = prefix_lower.as_bytes();
 
+        let mut collector = TopCollector::new(limit.max(8));
+
+        // 1. Shortcut check (e.g. 'cant' -> "can't", 'omw' -> "on my way") with alternatives
+        if let Some((shortcut, alternatives)) = find_shortcut_details(&prefix_lower) {
+            collector.insert(shortcut, 100_000);
+            for (idx, alt) in alternatives.iter().enumerate() {
+                collector.insert(alt, 90_000u32.saturating_sub((idx as u32) * 1_000));
+            }
+        }
+
+        // 2. Query User History Dictionary
+        let mut user_candidates: Vec<(&str, u32)> = Vec::with_capacity(16);
+        self.user_dict.find_completions(&prefix_lower, &mut user_candidates);
+        for (w, score) in user_candidates {
+            collector.insert(w, score);
+        }
+
+        // 3. Binary search base dictionary range
         let start_idx = match self.unigrams.binary_search_by(|entry| {
             let w = self.get_word(entry);
             if w.starts_with(&prefix_lower) {
@@ -83,18 +161,60 @@ impl Dictionary {
             Err(i) => i,
         };
 
-        let mut matches = Vec::new();
+        // Scan consecutive matching unigrams with zero string heap allocations
         for entry in &self.unigrams[start_idx..] {
             let w = self.get_word(entry);
             if !w.starts_with(&prefix_lower) {
                 break;
             }
-            matches.push((w.to_string(), entry.freq as u32));
+            collector.insert(w, entry.freq as u32);
         }
 
-        matches.sort_by(|a, b| b.1.cmp(&a.1));
-        matches.truncate(limit);
-        matches
+        // 4. Fallback search if fewer than 3 candidates:
+        // Shorten prefix by 1 character to find related stem completions
+        if collector.count < 3 && prefix_lower.len() > 1 {
+            let short_prefix = &prefix_lower[..prefix_lower.len() - 1];
+            let short_bytes = short_prefix.as_bytes();
+            let short_start = match self.unigrams.binary_search_by(|entry| {
+                let w = self.get_word(entry);
+                if w.starts_with(short_prefix) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    w.as_bytes().cmp(short_bytes)
+                }
+            }) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+
+            for entry in &self.unigrams[short_start..] {
+                let w = self.get_word(entry);
+                if !w.starts_with(short_prefix) {
+                    break;
+                }
+                collector.insert(w, (entry.freq as u32) / 2);
+                if collector.count >= 6 {
+                    break;
+                }
+            }
+        }
+
+        // 5. Final fallback if still fewer than 3 candidates
+        if collector.count < 3 {
+            let fallbacks = ["the", "to", "and", "you", "is", "a", "it", "in", "for"];
+            for f in fallbacks {
+                collector.insert(f, 50);
+                if collector.count >= 3 {
+                    break;
+                }
+            }
+        }
+
+        let mut results = Vec::with_capacity(collector.count);
+        for i in 0..collector.count {
+            results.push((collector.items[i].0.to_string(), collector.items[i].1));
+        }
+        results
     }
 
     pub fn predict_next_words(&self, prev_word: &str, limit: usize) -> Vec<(String, u32)> {
@@ -106,10 +226,10 @@ impl Dictionary {
         let mut results: Vec<(String, u32)> = Vec::with_capacity(limit * 2);
 
         // 1. Check user-learned dynamic bigrams first (highest priority)
-        for ((w1, w2), freq) in &self.user_bigrams {
-            if w1.eq_ignore_ascii_case(&prev_lower) {
-                results.push((w2.clone(), *freq + 10000));
-            }
+        let mut user_next = Vec::with_capacity(8);
+        self.user_dict.predict_next(&prev_lower, &mut user_next);
+        for (w, score) in user_next {
+            results.push((w.to_string(), score));
         }
 
         // 2. Query static compiled bigrams via binary search
@@ -158,14 +278,24 @@ impl Dictionary {
         results
     }
 
+    #[inline]
+    pub fn record_user_word(&mut self, word: &str, is_explicit_selection: bool) {
+        self.user_dict.record_word(word, is_explicit_selection);
+    }
+
+    #[inline]
     pub fn record_user_bigram(&mut self, prev_word: &str, next_word: &str) {
-        let w1 = prev_word.trim().to_lowercase();
-        let w2 = next_word.trim().to_lowercase();
-        if w1.is_empty() || w2.is_empty() || w1 == w2 {
-            return;
-        }
-        let count = self.user_bigrams.entry((w1, w2)).or_insert(0);
-        *count = count.saturating_add(1);
+        self.user_dict.record_bigram(prev_word, next_word);
+    }
+
+    #[inline]
+    pub fn revert_last_user_word(&mut self, word: &str) {
+        self.user_dict.revert_last_word(word);
+    }
+
+    #[inline]
+    pub fn flush_user_dict(&mut self) {
+        self.user_dict.flush_if_dirty();
     }
 
     fn load_default_corpus(&mut self) {

@@ -285,6 +285,7 @@ impl WaylandState {
             surface.commit();
         }
         self.clipboard_mode = false;
+        self.suggest_engine.dictionary.flush_user_dict();
     }
 
     pub fn toggle_keyboard(&mut self, qh: &QueueHandle<Self>) {

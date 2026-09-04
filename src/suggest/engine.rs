@@ -26,6 +26,17 @@ impl SuggestEngine {
         }
     }
 
+    /// Creates a SuggestEngine with empty user dictionary (isolated from disk).
+    pub fn new_empty() -> Self {
+        Self {
+            dictionary: Dictionary::new_empty(),
+            current_word: String::new(),
+            word_history: Vec::new(),
+            candidates: Vec::new(),
+            is_next_word_mode: false,
+        }
+    }
+
     pub fn swipe_candidates(&self, path: &[char]) -> Vec<String> {
         crate::suggest::swipe::swipe_candidates(path, &self.dictionary)
     }
@@ -58,6 +69,8 @@ impl SuggestEngine {
             // This backspace deleted that trailing space from the text box.
             self.is_next_word_mode = false;
             if let Some(last) = self.word_history.pop() {
+                // HeliBoard-style backspace undo: Revert transient unconfirmed word/bigram learning
+                self.dictionary.revert_last_user_word(&last);
                 self.current_word = last;
                 self.recalculate();
             } else {
@@ -126,6 +139,8 @@ impl SuggestEngine {
     pub fn on_space(&mut self) {
         if !self.current_word.is_empty() {
             let typed = std::mem::take(&mut self.current_word);
+            // Record unigram in user dictionary (transient on first type)
+            self.dictionary.record_user_word(&typed, false);
             if let Some(prev) = self.word_history.last() {
                 self.dictionary.record_user_bigram(prev, &typed);
             }
@@ -142,6 +157,8 @@ impl SuggestEngine {
 
     pub fn on_word_selected(&mut self, chosen_word: &str) {
         let chosen_clean = chosen_word.trim().to_string();
+        // Explicitly chosen word is immediately marked permanent (immune to pruning)
+        self.dictionary.record_user_word(&chosen_clean, true);
         if let Some(prev) = self.word_history.last() {
             self.dictionary.record_user_bigram(prev, &chosen_clean);
         }
@@ -160,7 +177,22 @@ impl SuggestEngine {
         }
 
         self.is_next_word_mode = true;
-        self.candidates = predictions.into_iter().map(|(w, _)| w).collect();
+        // predictions are sorted by highest frequency first: [p0, p1, p2]
+        // Center slot (idx 1) is the primary recommendation (p0)
+        // Left slot (idx 0) is runner-up (p1)
+        // Right slot (idx 2) is 3rd candidate (p2)
+        if predictions.len() >= 2 {
+            let p0 = predictions[0].0.clone();
+            let p1 = predictions[1].0.clone();
+            let p2 = if predictions.len() >= 3 {
+                predictions[2].0.clone()
+            } else {
+                p1.clone()
+            };
+            self.candidates = vec![p1, p0, p2];
+        } else {
+            self.candidates = predictions.into_iter().map(|(w, _)| w).collect();
+        }
     }
 
     pub fn clear(&mut self) {
@@ -183,31 +215,82 @@ impl SuggestEngine {
 
         self.is_next_word_mode = false;
         let prefix = &self.current_word;
-        let completions = self.dictionary.find_completions(prefix, 4);
+        let completions = self.dictionary.find_completions(prefix, 6);
+
+        // Helper to format case matching the typed prefix
+        let format_case = |word: &str| -> String {
+            if self.current_word.chars().all(|c| c.is_uppercase()) && self.current_word.len() > 1 {
+                word.to_uppercase()
+            } else if self.current_word.chars().next().map_or(false, |c| c.is_uppercase()) {
+                let mut c = word.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            } else {
+                word.to_string()
+            }
+        };
+
+        let mut pool: Vec<String> = Vec::with_capacity(completions.len());
+        for (comp, _) in completions {
+            let formatted = format_case(&comp);
+            if !pool.iter().any(|c| c.eq_ignore_ascii_case(&formatted)) {
+                pool.push(formatted);
+            }
+        }
+
+        let top_candidate = pool.first().cloned().unwrap_or_else(|| self.current_word.clone());
 
         let mut slots = Vec::with_capacity(3);
 
-        // Slot 1 (Left): Literal string typed so far
-        slots.push(self.current_word.clone());
-
-        // Slot 2 (Center - Best match) & Slot 3 (Right)
-        for (comp, _) in completions {
-            if !slots.iter().any(|s| s.eq_ignore_ascii_case(&comp)) {
-                // Preserve capitalization if typed in uppercase
-                let formatted = if self.current_word.chars().next().map_or(false, |c| c.is_uppercase()) {
-                    let mut c = comp.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        if top_candidate.eq_ignore_ascii_case(&self.current_word) {
+            // Case A: Typed word is already the exact top recommendation
+            // Center (Slot 1) = typed word / top candidate (e.g. "how")
+            // Left (Slot 0) = runner up (e.g. "however")
+            // Right (Slot 2) = 3rd candidate (e.g. "how's")
+            let mut left = String::new();
+            let mut right = String::new();
+            for c in &pool {
+                if !c.eq_ignore_ascii_case(&top_candidate) {
+                    if left.is_empty() {
+                        left = c.clone();
+                    } else if right.is_empty() && !c.eq_ignore_ascii_case(&left) {
+                        right = c.clone();
+                        break;
                     }
-                } else {
-                    comp
-                };
-                slots.push(formatted);
-                if slots.len() >= 3 {
+                }
+            }
+            if left.is_empty() {
+                left = self.current_word.clone();
+            }
+            if right.is_empty() {
+                right = left.clone();
+            }
+            slots.push(left);          // Slot 0 (Left)
+            slots.push(top_candidate);  // Slot 1 (Center)
+            slots.push(right);         // Slot 2 (Right)
+        } else {
+            // Case B: Top candidate is an autocorrect / contraction / completion
+            // e.g. typed "cant" -> top is "can't", typed "dont" -> top is "don't", typed "omw" -> top is "on my way"
+            // Slot 0 (Left) = Literal string typed by user (so user can tap to keep literal)
+            // Slot 1 (Center) = Top candidate (the correct punctuation / contraction / recommendation)
+            // Slot 2 (Right) = Alternative completion (runner up)
+            let left = self.current_word.clone();
+            let center = top_candidate;
+            let mut right = String::new();
+            for c in &pool {
+                if !c.eq_ignore_ascii_case(&left) && !c.eq_ignore_ascii_case(&center) {
+                    right = c.clone();
                     break;
                 }
             }
+            if right.is_empty() {
+                right = center.clone();
+            }
+            slots.push(left);   // Slot 0 (Left)
+            slots.push(center); // Slot 1 (Center)
+            slots.push(right);  // Slot 2 (Right)
         }
 
         self.candidates = slots;
@@ -220,22 +303,23 @@ mod tests {
 
     #[test]
     fn test_prefix_suggestions() {
-        let mut engine = SuggestEngine::new();
+        let mut engine = SuggestEngine::new_empty();
         engine.push_char('h');
         engine.push_char('o');
         engine.push_char('w');
         assert_eq!(engine.current_word, "how");
-        assert!(!engine.candidates.is_empty());
-        assert_eq!(engine.candidates[0], "how");
+        assert_eq!(engine.candidates.len(), 3);
+        // Center slot is the top candidate "how"
+        assert_eq!(engine.candidates[1], "how");
         assert!(!engine.is_next_word_mode);
     }
 
     #[test]
     fn test_next_word_prediction() {
-        let mut engine = SuggestEngine::new();
+        let mut engine = SuggestEngine::new_empty();
         engine.on_word_selected("how");
         assert!(engine.is_next_word_mode);
-        assert!(!engine.candidates.is_empty());
+        assert_eq!(engine.candidates.len(), 3);
         assert!(engine.candidates.contains(&"are".to_string()) || engine.candidates.contains(&"is".to_string()));
 
         // Next word selection: "how" -> "are"
@@ -246,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_user_bigram_learning() {
-        let mut engine = SuggestEngine::new();
+        let mut engine = SuggestEngine::new_empty();
         engine.on_word_selected("hyprosk");
         engine.on_word_selected("keyboard");
 
@@ -257,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_backspace_editing() {
-        let mut engine = SuggestEngine::new();
+        let mut engine = SuggestEngine::new_empty();
         // Type "balls"
         for c in "balls".chars() {
             engine.push_char(c);
@@ -278,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_word_selection_backspace_and_replacement() {
-        let mut engine = SuggestEngine::new();
+        let mut engine = SuggestEngine::new_empty();
         // 1. Type "up"
         engine.push_char('u');
         engine.push_char('p');
@@ -307,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_multi_word_backspacing_and_editing() {
-        let mut engine = SuggestEngine::new();
+        let mut engine = SuggestEngine::new_empty();
         // Type "hello how are you "
         for w in &["hello", "how", "are", "you"] {
             for c in w.chars() {
@@ -344,5 +428,85 @@ mod tests {
         engine.push_char('m');
         assert_eq!(engine.current_word, "arm");
         assert!(engine.candidates.iter().any(|c| c.starts_with("arm")));
+    }
+
+    #[test]
+    fn test_contraction_shortcut_expansion() {
+        let mut engine = SuggestEngine::new_empty();
+        // Type "cant"
+        for c in "cant".chars() {
+            engine.push_char(c);
+        }
+        assert_eq!(engine.current_word, "cant");
+        assert_eq!(engine.candidates.len(), 3);
+        assert_eq!(engine.candidates[0], "cant");      // Left: raw literal
+        assert_eq!(engine.candidates[1], "can't");     // Center: punctuation contraction
+        assert_eq!(engine.candidates[2], "cannot");    // Right: alternative
+
+        // Type "dont"
+        engine.clear();
+        for c in "dont".chars() {
+            engine.push_char(c);
+        }
+        assert_eq!(engine.candidates.len(), 3);
+        assert_eq!(engine.candidates[0], "dont");      // Left: raw literal
+        assert_eq!(engine.candidates[1], "don't");     // Center: punctuation contraction
+        assert_eq!(engine.candidates[2], "done");      // Right: alternative
+
+        // Type "omw"
+        engine.clear();
+        for c in "omw".chars() {
+            engine.push_char(c);
+        }
+        assert_eq!(engine.candidates.len(), 3);
+        assert_eq!(engine.candidates[0], "omw");        // Left: raw literal
+        assert_eq!(engine.candidates[1], "on my way");  // Center: shortcut expansion
+        assert_eq!(engine.candidates[2], "omg");        // Right: alternative
+    }
+
+    #[test]
+    fn test_slang_learning_and_permanence() {
+        let mut engine = SuggestEngine::new_empty();
+        // 1. Type unknown slang "hyprosk" and space
+        for c in "hyprosk".chars() {
+            engine.push_char(c);
+        }
+        engine.push_char(' ');
+
+        // 2. It should be registered in user dictionary
+        assert_eq!(engine.dictionary.user_dict.words.len(), 1);
+        assert_eq!(engine.dictionary.user_dict.words[0].as_str(), "hyprosk");
+        assert_eq!(engine.dictionary.user_dict.words[0].count, 1);
+        assert_eq!(engine.dictionary.user_dict.words[0].is_permanent, 0);
+
+        // 3. Type "hyprosk" again -> reinforced to permanent
+        for c in "hyprosk".chars() {
+            engine.push_char(c);
+        }
+        engine.push_char(' ');
+        assert_eq!(engine.dictionary.user_dict.words[0].count, 2);
+        assert_eq!(engine.dictionary.user_dict.words[0].is_permanent, 1);
+
+        // 4. Now typing "hypr" should find "hyprosk" in candidates!
+        engine.push_char('h');
+        engine.push_char('y');
+        engine.push_char('p');
+        engine.push_char('r');
+        assert!(engine.candidates.contains(&"hyprosk".to_string()));
+    }
+
+    #[test]
+    fn test_backspace_undo_transient_word() {
+        let mut engine = SuggestEngine::new_empty();
+        // Type typo "misstype" and space
+        for c in "misstype".chars() {
+            engine.push_char(c);
+        }
+        engine.push_char(' ');
+        assert_eq!(engine.dictionary.user_dict.words.len(), 1);
+
+        // Immediately backspace -> undo reverts the transient word!
+        engine.pop_char();
+        assert_eq!(engine.dictionary.user_dict.words.len(), 0);
     }
 }
