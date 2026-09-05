@@ -53,11 +53,11 @@ pub fn compile_combined<P: AsRef<Path>, Q: AsRef<Path>>(
 
                 let mut freq: u16 = 100;
                 for part in parts {
-                    if let Some(f_str) = part.strip_prefix("f=") {
-                        if let Ok(val) = f_str.parse::<u16>() {
-                            // Scale 0..255 to 100..10000 range
-                            freq = (val as u32 * 39 + 55) as u16;
-                        }
+                    if let Some(f_str) = part.strip_prefix("f=")
+                        && let Ok(val) = f_str.parse::<u16>()
+                    {
+                        // Scale 0..255 to 100..10000 range
+                        freq = (val as u32 * 39 + 55) as u16;
                     }
                 }
 
@@ -68,29 +68,29 @@ pub fn compile_combined<P: AsRef<Path>, Q: AsRef<Path>>(
                     bigrams: Vec::new(),
                 });
             }
-        } else if let Some(rest) = trimmed.strip_prefix("  bigram=") {
-            if let Some(ref parent) = current_word {
-                let mut parts = rest.split(',');
-                if let Some(target) = parts.next() {
-                    let clean_target = target.trim().to_lowercase();
-                    if !clean_target.is_empty() && clean_target.chars().all(|c| c.is_ascii_alphabetic() || c == '\'') {
-                        let mut b_freq: u16 = 100;
-                        for part in parts {
-                            if let Some(f_str) = part.strip_prefix("f=") {
-                                if let Ok(val) = f_str.parse::<u16>() {
-                                    // AOSP bigram freq is 1, 2, 3 or 0..255
-                                    b_freq = match val {
-                                        1 => 500,
-                                        2 => 750,
-                                        3 => 1000,
-                                        other => (other as u32 * 4) as u16,
-                                    };
-                                }
-                            }
+        } else if let Some(rest) = trimmed.strip_prefix("  bigram=")
+            && let Some(ref parent) = current_word
+        {
+            let mut parts = rest.split(',');
+            if let Some(target) = parts.next() {
+                let clean_target = target.trim().to_lowercase();
+                if !clean_target.is_empty() && clean_target.chars().all(|c| c.is_ascii_alphabetic() || c == '\'') {
+                    let mut b_freq: u16 = 100;
+                    for part in parts {
+                        if let Some(f_str) = part.strip_prefix("f=")
+                            && let Ok(val) = f_str.parse::<u16>()
+                        {
+                            // AOSP bigram freq is 1, 2, 3 or 0..255
+                            b_freq = match val {
+                                1 => 500,
+                                2 => 750,
+                                3 => 1000,
+                                other => (other as u32 * 4) as u16,
+                            };
                         }
-                        if let Some(rw) = words_map.get_mut(parent) {
-                            rw.bigrams.push((clean_target, b_freq));
-                        }
+                    }
+                    if let Some(rw) = words_map.get_mut(parent) {
+                        rw.bigrams.push((clean_target, b_freq));
                     }
                 }
             }
@@ -133,7 +133,7 @@ pub fn compile_combined<P: AsRef<Path>, Q: AsRef<Path>>(
 
     // Sort all words by frequency descending to pick the top `max_words`
     let mut word_list: Vec<RawWord> = words_map.into_values().collect();
-    word_list.sort_by(|a, b| b.freq.cmp(&a.freq));
+    word_list.sort_by_key(|w| std::cmp::Reverse(w.freq));
     word_list.truncate(max_words);
 
     // Sort selected words alphabetically (critical for binary search on prefix scanning)

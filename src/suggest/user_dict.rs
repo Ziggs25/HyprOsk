@@ -167,10 +167,8 @@ impl UserDictionary {
     /// - If typed 2+ times or explicitly selected, marked as `is_permanent = 1` (NEVER deleted).
     pub fn record_word(&mut self, raw_word: &str, is_explicit_selection: bool) {
         let clean = raw_word.trim().to_lowercase();
-        if clean.len() < 2 || clean.len() > MAX_WORD_LEN {
-            if clean != "a" && clean != "i" {
-                return;
-            }
+        if (clean.len() < 2 || clean.len() > MAX_WORD_LEN) && clean != "a" && clean != "i" {
+            return;
         }
         let bytes = clean.as_bytes();
         let len = bytes.len() as u8;
@@ -227,8 +225,8 @@ impl UserDictionary {
 
         for b in &mut self.bigrams {
             if b.prev_len == p_len && b.next_len == n_len
-                && &b.prev_word[..p_len as usize] == &p_bytes[..p_len as usize]
-                && &b.next_word[..n_len as usize] == &n_bytes[..n_len as usize]
+                && b.prev_word[..p_len as usize] == p_bytes[..p_len as usize]
+                && b.next_word[..n_len as usize] == n_bytes[..n_len as usize]
             {
                 b.count = b.count.saturating_add(1);
                 self.is_dirty = true;
@@ -472,10 +470,8 @@ impl UserDictionary {
 
     /// Flushes changes to disk if dirty.
     pub fn flush_if_dirty(&mut self) {
-        if self.is_dirty {
-            if let Some(path) = self.save_path.clone() {
-                let _ = self.save_to_disk(&path);
-            }
+        if self.is_dirty && let Some(path) = self.save_path.clone() {
+            let _ = self.save_to_disk(&path);
         }
     }
 }

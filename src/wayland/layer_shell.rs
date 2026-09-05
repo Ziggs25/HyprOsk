@@ -24,9 +24,13 @@ impl LayerShellHandler for WaylandState {
         let effective_h = if h > 0 { h } else { self.height };
 
         tracing::info!("LayerSurface configured: {}x{}", effective_w, effective_h);
+        let size_changed = self.width != effective_w || self.height != effective_h;
         self.width = effective_w;
         self.height = effective_h;
         self.is_configured = true;
+        if size_changed {
+            self.update_key_rects();
+        }
 
         if self.is_visible {
             self.redraw(qh);

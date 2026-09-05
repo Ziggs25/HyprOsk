@@ -221,7 +221,7 @@ impl SuggestEngine {
         let format_case = |word: &str| -> String {
             if self.current_word.chars().all(|c| c.is_uppercase()) && self.current_word.len() > 1 {
                 word.to_uppercase()
-            } else if self.current_word.chars().next().map_or(false, |c| c.is_uppercase()) {
+            } else if self.current_word.chars().next().is_some_and(|c| c.is_uppercase()) {
                 let mut c = word.chars();
                 match c.next() {
                     None => String::new(),

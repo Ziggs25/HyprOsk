@@ -76,12 +76,12 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
     event_queue.roundtrip(&mut state).context("Initial Wayland roundtrip failed")?;
 
     // Bind input method to default seat if manager exists
-    if let Some(ref imm) = state.im_manager {
-        if let Some(seat) = state.seat_state.seats().next() {
-            let im = imm.get_input_method(&seat, &qh, ());
-            state.input_method = Some(im);
-            tracing::info!("Registered zwp_input_method_v2 on seat {:?}", seat);
-        }
+    if let Some(ref imm) = state.im_manager
+        && let Some(seat) = state.seat_state.seats().next()
+    {
+        let im = imm.get_input_method(&seat, &qh, ());
+        state.input_method = Some(im);
+        tracing::info!("Registered zwp_input_method_v2 on seat {:?}", seat);
     }
 
     // Bind virtual keyboard for keycodes (arrows, Esc, and fallback keys)

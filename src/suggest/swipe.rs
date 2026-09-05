@@ -53,6 +53,6 @@ pub fn swipe_candidates(path: &[char], dict: &Dictionary) -> Vec<String> {
         let score = freq as i32 - (dist as i32 * 1800) - ((swipe.len() as i32 - word.len() as i32).abs() * 200);
         scored.push((word, score));
     }
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|b| std::cmp::Reverse(b.1));
     scored.into_iter().take(3).map(|(w, _)| w).collect()
 }

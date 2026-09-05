@@ -117,12 +117,11 @@ impl RenderEngine {
 
         for (r_idx, row_rects) in key_rects.iter().enumerate() {
             for (rect, k_idx) in row_rects {
-                if rect.contains(px, py) {
-                    if let Some(row) = layout.rows.get(r_idx) {
-                        if let Some(key) = row.keys.get(*k_idx) {
-                            return Some((r_idx, *k_idx, key));
-                        }
-                    }
+                if rect.contains(px, py)
+                    && let Some(row) = layout.rows.get(r_idx)
+                    && let Some(key) = row.keys.get(*k_idx)
+                {
+                    return Some((r_idx, *k_idx, key));
                 }
             }
         }
@@ -231,11 +230,11 @@ impl RenderEngine {
                 }
 
                 // If this is the spacebar and the user is swiping to move cursor, draw glide indicator
-                if let Some(offset) = swipe_offset {
-                    if key.label.contains("English") || key.label.contains("␣") {
-                        let indicator_x = (rect.x + (rect.w / 2.0) + offset).clamp(rect.x + 10.0, rect.x + rect.w - 10.0);
-                        Self::draw_glide_indicator(pixel_u32_slice, width, height, indicator_x, rect.y + rect.h - 6.0, theme.accent_color);
-                    }
+                if let Some(offset) = swipe_offset
+                    && (key.label.contains("English") || key.label.contains("␣"))
+                {
+                    let indicator_x = (rect.x + (rect.w / 2.0) + offset).clamp(rect.x + 10.0, rect.x + rect.w - 10.0);
+                    Self::draw_glide_indicator(pixel_u32_slice, width, height, indicator_x, rect.y + rect.h - 6.0, theme.accent_color);
                 }
             }
         }
@@ -345,13 +344,12 @@ impl RenderEngine {
             let ox = start_x + (i as i32 * (char_w + scale));
             let bitmap = get_glyph_bitmap(ch);
 
-            for row in 0..8 {
-                let row_bits = bitmap[row];
-                for col in 0..8 {
+            for (row, &row_bits) in bitmap.iter().enumerate() {
+                for col in 0..8i32 {
                     if (row_bits & (1 << (7 - col))) != 0 {
                         for sy in 0..scale {
                             for sx in 0..scale {
-                                let px = ox + (col as i32 * scale) + sx;
+                                let px = ox + (col * scale) + sx;
                                 let py = start_y + (row as i32 * scale) + sy;
                                 if px >= 0 && px < stride as i32 && py >= 0 && py < max_h as i32 {
                                     let idx = (py as u32 * stride + px as u32) as usize;

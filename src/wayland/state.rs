@@ -38,7 +38,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 
 use crate::config::Config;
 use crate::layout::{key::KeyAction, KeyboardLayout, LayerId};
-use crate::render::engine::RenderEngine;
+use crate::render::engine::{Rect, RenderEngine};
 use crate::render::slint::SlintScene;
 use crate::render::theme::Theme;
 use crate::suggest::SuggestEngine;
@@ -112,6 +112,7 @@ pub struct WaylandState {
     pub im_state: InputMethodState,
     pub current_layer: LayerId,
     pub layout: KeyboardLayout,
+    pub key_rects: Vec<Vec<(Rect, usize)>>,
     pub theme: Theme,
     pub config: Config,
     pub suggest_engine: SuggestEngine,
@@ -179,6 +180,7 @@ impl WaylandState {
         let height = config.general.height;
         let suggest_engine = SuggestEngine::new();
         let layout = KeyboardLayout::get_layout(LayerId::Lower, &[]);
+        let key_rects = RenderEngine::calculate_key_rects(&layout, 1000, height, &theme);
 
         Self {
             registry_state,
@@ -210,6 +212,7 @@ impl WaylandState {
             im_state: InputMethodState::default(),
             current_layer: LayerId::Lower,
             layout,
+            key_rects,
             theme,
             config,
             suggest_engine,
@@ -529,6 +532,11 @@ impl WaylandState {
         self.sync_layout_and_redraw(qh);
     }
 
+    #[inline]
+    pub fn update_key_rects(&mut self) {
+        self.key_rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+    }
+
     pub fn sync_layout_and_redraw(&mut self, qh: &QueueHandle<Self>) {
         if self.clipboard_mode {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
@@ -537,6 +545,7 @@ impl WaylandState {
             self.layout =
                 KeyboardLayout::get_layout_with_caps(self.current_layer, &self.suggest_engine.candidates, self.caps_lock);
         }
+        self.update_key_rects();
         self.redraw(qh);
     }
 
@@ -594,16 +603,7 @@ impl WaylandState {
                 continue;
             };
 
-            RenderEngine::render(
-                canvas,
-                width,
-                height,
-                &self.layout,
-                &self.theme,
-                &self.pressed_keys,
-                &latched_keys,
-                self.swipe_offset,
-            );
+            let mut slint_damage: Option<Vec<(i32, i32, i32, i32)>> = None;
             // Paint swap: render the Wireframe scene through Slint when available.
             if self.slint_scene.is_none() {
                 match SlintScene::new(width, height) {
@@ -614,7 +614,7 @@ impl WaylandState {
                 }
             }
             if let Some(scene) = self.slint_scene.as_mut() {
-                if scene.render(
+                if let Some(damage) = scene.render(
                     &self.layout,
                     &self.theme,
                     width,
@@ -625,26 +625,36 @@ impl WaylandState {
                     self.hold_preview.clone(),
                     canvas,
                 ) {
+                    slint_damage = Some(damage);
                     tracing::trace!("Painted frame via Slint scene ({}x{})", width, height);
                 } else {
                     tracing::warn!("Slint frame render failed, falling back to legacy renderer");
-                    RenderEngine::render(
-                        canvas,
-                        width,
-                        height,
-                        &self.layout,
-                        &self.theme,
-                        &self.pressed_keys,
-                        &latched_keys,
-                        self.swipe_offset,
-                    );
                 }
+            }
+
+            if slint_damage.is_none() {
+                RenderEngine::render(
+                    canvas,
+                    width,
+                    height,
+                    &self.layout,
+                    &self.theme,
+                    &self.pressed_keys,
+                    &latched_keys,
+                    self.swipe_offset,
+                );
             }
 
             if let Some(ref surface) = self.layer_surface
                 && buffer.attach_to(surface.wl_surface()).is_ok()
             {
-                surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+                if let Some(ref rects) = slint_damage && !rects.is_empty() {
+                    for &(dx, dy, dw, dh) in rects {
+                        surface.wl_surface().damage_buffer(dx, dy, dw, dh);
+                    }
+                } else {
+                    surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+                }
                 surface.commit();
             }
             break;
@@ -931,15 +941,10 @@ impl WaylandState {
             && let Some(instant) = self.press_instant
             && instant.elapsed().as_millis() > 300
         {
-            if self.hold_preview.is_none() {
-                let rects = RenderEngine::calculate_key_rects(
-                    &self.layout,
-                    self.width,
-                    self.height,
-                    &self.theme,
-                );
-                if let Some((rect, _)) = rects.get(r_idx).and_then(|r| r.get(k_idx)) {
-                    let popup_w = rect.w * 1.22;
+            if self.hold_preview.is_none()
+                && let Some((rect, _)) = self.key_rects.get(r_idx).and_then(|r| r.get(k_idx))
+            {
+                let popup_w = rect.w * 1.22;
                     let popup_h = rect.h * 1.45;
                     let mut popup_x = rect.x + rect.w / 2.0 - popup_w / 2.0;
                     let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 72.0;
@@ -954,7 +959,6 @@ impl WaylandState {
                     });
                     self.redraw(qh);
                 }
-            }
             return;
         }
         if self.hold_preview.is_some() {
@@ -1212,8 +1216,7 @@ impl PointerHandler for WaylandState {
                 PointerEventKind::Press { .. } => {
                     self.note_input(false);
                     let (x, y) = event.position;
-                    let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
-                    if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
+                    if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &self.key_rects, x, y) {
                         if matches!(key.action, KeyAction::Space) {
                             self.space_touch_start = Some((x, y));
                             self.space_last_x = x;
@@ -1291,8 +1294,7 @@ impl TouchHandler for WaylandState {
         self.note_input(true);
         let (x, y) = position;
         tracing::info!("touch down id={} pos=({:.0},{:.0}) active={}", _id, x, y, self.active_touches.len()+1);
-        let rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
-        if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &rects, x, y) {
+        if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &self.key_rects, x, y) {
             tracing::info!("  -> hit key {:?} at {}:{}", key.action, r_idx, k_idx);
             if matches!(key.action, KeyAction::Space) {
                 self.space_touch_start = Some((x, y));

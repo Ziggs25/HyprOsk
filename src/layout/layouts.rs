@@ -51,7 +51,7 @@ impl KeyboardLayout {
         keys.push(Key::new("gear", KeyAction::None).with_weight(action_weight).special());
         keys.push(Key::new("palette", KeyAction::None).with_weight(action_weight).special());
 
-        let s0 = suggestions.get(0).map(|s| s.as_str()).unwrap_or("");
+        let s0 = suggestions.first().map(|s| s.as_str()).unwrap_or("");
         let s1 = suggestions.get(1).map(|s| s.as_str()).unwrap_or("");
         let s2 = suggestions.get(2).map(|s| s.as_str()).unwrap_or("");
 

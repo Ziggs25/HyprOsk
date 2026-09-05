@@ -180,10 +180,10 @@ pub fn usb_folio_present() -> bool {
             let product_path = path.join("idProduct");
             if let Ok(vendor) = fs::read_to_string(&vendor_path)
                 && let Ok(product) = fs::read_to_string(&product_path)
+                && vendor.trim().eq_ignore_ascii_case("044e")
+                && product.trim().eq_ignore_ascii_case("1218")
             {
-                if vendor.trim().eq_ignore_ascii_case("044e") && product.trim().eq_ignore_ascii_case("1218") {
-                    return true;
-                }
+                return true;
             }
         }
     }

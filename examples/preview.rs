@@ -32,9 +32,9 @@ fn main() {
 
     let mut scene = SlintScene::new(W, H).expect("SlintScene::new");
     let mut argb = vec![0u8; (W * H * 4) as usize];
-    let ok = scene.render(&layout, &theme, W, H, &[(2, 0)], &[], None, None, argb.as_mut());
-    println!("render ok: {ok}");
-    assert!(ok);
+    let damage = scene.render(&layout, &theme, W, H, &[(2, 0)], &[], None, None, argb.as_mut());
+    println!("render ok: {}", damage.is_some());
+    assert!(damage.is_some());
 
     let mut fails = 0usize;
     // 1. Flush square dock: the top-left corner is solid black (#000000).
