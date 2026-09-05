@@ -1,4 +1,4 @@
-use crate::layout::key::{Key, KeyAction, LayerId};
+use crate::layout::key::{Key, KeyAction, LayerId, LayoutMode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyboardRow {
@@ -25,6 +25,15 @@ mod flex {
 }
 
 impl KeyboardLayout {
+    /// Returns true if this layout is the mobile (HeliBoard / Gboard) layout.
+    /// In mobile layout, row 1 contains 10 letter keys without Esc.
+    pub fn is_mobile(&self) -> bool {
+        self.rows
+            .get(1)
+            .map(|r| r.keys.len() == 10 && !r.keys[0].is_special)
+            .unwrap_or(false)
+    }
+
     pub fn get_layout_with_caps(id: LayerId, suggestions: &[String], caps_lock: bool) -> Self {
         match id {
             LayerId::Lower => Self::letters(false, suggestions, false),
@@ -32,6 +41,28 @@ impl KeyboardLayout {
             LayerId::Symbols => Self::symbols_page1(suggestions),
             LayerId::Symbols2 => Self::symbols_page2(suggestions),
         }
+    }
+
+    pub fn get_portrait_layout_with_caps(id: LayerId, suggestions: &[String], caps_lock: bool) -> Self {
+        match id {
+            LayerId::Lower => Self::letters_portrait(false, suggestions, false),
+            LayerId::Upper => Self::letters_portrait(true, suggestions, caps_lock),
+            LayerId::Symbols => Self::symbols_page1_portrait(suggestions),
+            LayerId::Symbols2 => Self::symbols_page2_portrait(suggestions),
+        }
+    }
+
+    pub fn get_layout_for_mode(id: LayerId, suggestions: &[String], caps_lock: bool, mode: LayoutMode) -> Self {
+        match mode {
+            LayoutMode::Mobile => Self::get_portrait_layout_with_caps(id, suggestions, caps_lock),
+            LayoutMode::Desktop => Self::get_layout_with_caps(id, suggestions, caps_lock),
+        }
+    }
+
+    pub fn get_layout_for_size(id: LayerId, suggestions: &[String], caps_lock: bool, width: u32, height: u32) -> Self {
+        let is_portrait = width < 1000 || (width as f32 / height.max(1) as f32) < 1.25;
+        let mode = if is_portrait { LayoutMode::Mobile } else { LayoutMode::Desktop };
+        Self::get_layout_for_mode(id, suggestions, caps_lock, mode)
     }
 
     pub fn get_layout(id: LayerId, suggestions: &[String]) -> Self {
@@ -345,6 +376,225 @@ impl KeyboardLayout {
         }
 
         Self { id: LayerId::Lower, rows }.with_top_bar(suggestions)
+    }
+
+    /// HeliBoard / Gboard portrait layout: Clean mobile 4-row layout without desktop keys.
+    ///
+    /// Row 1: q w e r t y u i o p (dual secondary: 1..0)
+    /// Row 2: a s d f g h j k l (dual secondary: @ # $ % & - + ( ))
+    /// Row 3: Shift (1.35) · z x c v b n m · ⌫ (1.35)
+    /// Row 4: ?123 (1.35) · , (1.0) · Space (4.9) · . (1.0) · ⏎ (1.35)
+    pub fn letters_portrait(upper: bool, suggestions: &[String], caps_lock: bool) -> Self {
+        let (id, upper) = if upper {
+            (LayerId::Upper, true)
+        } else {
+            (LayerId::Lower, false)
+        };
+        let text = |c: char| if upper { c.to_ascii_uppercase() } else { c };
+        let dual = |ch: char, sec: char| {
+            if upper {
+                Key::text(text(ch))
+            } else {
+                Key::text(text(ch)).with_secondary(sec)
+            }
+        };
+        let shift_label = if caps_lock { "⇪" } else { "⇧" };
+
+        let side_key_w = 1.35;
+        let p_space_w = 4.9;
+
+        Self {
+            id,
+            rows: vec![
+                KeyboardRow {
+                    keys: vec![
+                        dual('q', '1'),
+                        dual('w', '2'),
+                        dual('e', '3'),
+                        dual('r', '4'),
+                        dual('t', '5'),
+                        dual('y', '6'),
+                        dual('u', '7'),
+                        dual('i', '8'),
+                        dual('o', '9'),
+                        dual('p', '0'),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        dual('a', '@'),
+                        dual('s', '#'),
+                        dual('d', '$'),
+                        dual('f', '%'),
+                        dual('g', '&'),
+                        dual('h', '-'),
+                        dual('j', '+'),
+                        dual('k', '('),
+                        dual('l', ')'),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new(shift_label, KeyAction::Shift).with_weight(side_key_w).special(),
+                        dual('z', '*'),
+                        dual('x', '"'),
+                        dual('c', '\''),
+                        dual('v', ':'),
+                        dual('b', ';'),
+                        dual('n', '!'),
+                        dual('m', '?'),
+                        Key::new("⌫", KeyAction::Backspace).with_weight(side_key_w).special(),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("?123", KeyAction::SwitchLayer(LayerId::Symbols)).with_weight(side_key_w).special(),
+                        Key::text(",").with_weight(1.0),
+                        Key::new("Space", KeyAction::Space).with_weight(p_space_w),
+                        Key::text(".").with_weight(1.0),
+                        Key::new("⏎", KeyAction::Enter).with_weight(side_key_w).special(),
+                    ],
+                },
+            ],
+        }
+        .with_top_bar(suggestions)
+    }
+
+    /// HeliBoard / Gboard portrait symbols page 1 (numbers & primary symbols).
+    ///
+    /// Row 1: 1 2 3 4 5 6 7 8 9 0
+    /// Row 2: @ # $ % & - + ( ) /
+    /// Row 3: =\< (1.35) · * " ' : ; ! ? · ⌫ (1.35)
+    /// Row 4: abc (1.35) · , (1.0) · Space (4.9) · . (1.0) · ⏎ (1.35)
+    pub fn symbols_page1_portrait(suggestions: &[String]) -> Self {
+        let side_key_w = 1.35;
+        let p_space_w = 4.9;
+
+        Self {
+            id: LayerId::Symbols,
+            rows: vec![
+                KeyboardRow {
+                    keys: vec![
+                        Key::text("1"),
+                        Key::text("2"),
+                        Key::text("3"),
+                        Key::text("4"),
+                        Key::text("5"),
+                        Key::text("6"),
+                        Key::text("7"),
+                        Key::text("8"),
+                        Key::text("9"),
+                        Key::text("0"),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::text("@"),
+                        Key::text("#"),
+                        Key::text("$"),
+                        Key::text("%"),
+                        Key::text("&"),
+                        Key::text("-"),
+                        Key::text("+"),
+                        Key::text("("),
+                        Key::text(")"),
+                        Key::text("/"),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("=\\<", KeyAction::SwitchLayer(LayerId::Symbols2)).with_weight(side_key_w).special(),
+                        Key::text("*"),
+                        Key::text("\""),
+                        Key::text("'"),
+                        Key::text(":"),
+                        Key::text(";"),
+                        Key::text("!"),
+                        Key::text("?"),
+                        Key::new("⌫", KeyAction::Backspace).with_weight(side_key_w).special(),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("abc", KeyAction::SwitchLayer(LayerId::Lower)).with_weight(side_key_w).special(),
+                        Key::text(",").with_weight(1.0),
+                        Key::new("Space", KeyAction::Space).with_weight(p_space_w),
+                        Key::text(".").with_weight(1.0),
+                        Key::new("⏎", KeyAction::Enter).with_weight(side_key_w).special(),
+                    ],
+                },
+            ],
+        }
+        .with_top_bar(suggestions)
+    }
+
+    /// HeliBoard / Gboard portrait symbols page 2 (brackets & extended symbols).
+    ///
+    /// Row 1: ~ ` | ^ _ = < > [ ]
+    /// Row 2: { } € £ ¥ ¢ ₹ ° • \
+    /// Row 3: 123 (1.35) · © ® ™ « » ± × ÷ · ⌫ (1.35)
+    /// Row 4: abc (1.35) · , (1.0) · Space (4.9) · . (1.0) · ⏎ (1.35)
+    pub fn symbols_page2_portrait(suggestions: &[String]) -> Self {
+        let side_key_w = 1.35;
+        let p_space_w = 4.9;
+
+        Self {
+            id: LayerId::Symbols2,
+            rows: vec![
+                KeyboardRow {
+                    keys: vec![
+                        Key::text("~"),
+                        Key::text("`"),
+                        Key::text("|"),
+                        Key::text("^"),
+                        Key::text("_"),
+                        Key::text("="),
+                        Key::text("<"),
+                        Key::text(">"),
+                        Key::text("["),
+                        Key::text("]"),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::text("{"),
+                        Key::text("}"),
+                        Key::text("€"),
+                        Key::text("£"),
+                        Key::text("¥"),
+                        Key::text("¢"),
+                        Key::text("₹"),
+                        Key::text("°"),
+                        Key::text("•"),
+                        Key::text("\\"),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("123", KeyAction::SwitchLayer(LayerId::Symbols)).with_weight(side_key_w).special(),
+                        Key::text("©"),
+                        Key::text("®"),
+                        Key::text("™"),
+                        Key::text("«"),
+                        Key::text("»"),
+                        Key::text("±"),
+                        Key::text("×"),
+                        Key::text("÷"),
+                        Key::new("⌫", KeyAction::Backspace).with_weight(side_key_w).special(),
+                    ],
+                },
+                KeyboardRow {
+                    keys: vec![
+                        Key::new("abc", KeyAction::SwitchLayer(LayerId::Lower)).with_weight(side_key_w).special(),
+                        Key::text(",").with_weight(1.0),
+                        Key::new("Space", KeyAction::Space).with_weight(p_space_w),
+                        Key::text(".").with_weight(1.0),
+                        Key::new("⏎", KeyAction::Enter).with_weight(side_key_w).special(),
+                    ],
+                },
+            ],
+        }
+        .with_top_bar(suggestions)
     }
 }
 

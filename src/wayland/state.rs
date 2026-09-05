@@ -37,7 +37,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 
 use crate::config::Config;
-use crate::layout::{key::KeyAction, KeyboardLayout, LayerId};
+use crate::layout::{key::KeyAction, KeyboardLayout, LayerId, LayoutMode};
 use crate::render::engine::{Rect, RenderEngine};
 use crate::render::slint::SlintScene;
 use crate::render::theme::Theme;
@@ -111,6 +111,7 @@ pub struct WaylandState {
     // Input, Suggestions & Gesture State
     pub im_state: InputMethodState,
     pub current_layer: LayerId,
+    pub layout_mode: LayoutMode,
     pub layout: KeyboardLayout,
     pub key_rects: Vec<Vec<(Rect, usize)>>,
     pub theme: Theme,
@@ -179,7 +180,8 @@ impl WaylandState {
         let theme = Theme::from(&config.theme);
         let height = config.general.height;
         let suggest_engine = SuggestEngine::new();
-        let layout = KeyboardLayout::get_layout(LayerId::Lower, &[]);
+        let layout_mode = LayoutMode::parse_mode(&config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
+        let layout = KeyboardLayout::get_layout_for_mode(LayerId::Lower, &[], false, layout_mode);
         let key_rects = RenderEngine::calculate_key_rects(&layout, 1000, height, &theme);
 
         Self {
@@ -211,6 +213,7 @@ impl WaylandState {
             canvas_size: (0, 0),
             im_state: InputMethodState::default(),
             current_layer: LayerId::Lower,
+            layout_mode,
             layout,
             key_rects,
             theme,
@@ -299,6 +302,44 @@ impl WaylandState {
         }
     }
 
+    pub fn set_layout_mode(&mut self, mode: LayoutMode, qh: &QueueHandle<Self>) {
+        if self.layout_mode != mode {
+            self.layout_mode = mode;
+            tracing::info!("HyprOsk layout mode set to: {:?}", mode);
+            if self.is_visible && self.is_configured {
+                self.sync_layout_and_redraw(qh);
+            }
+        }
+    }
+
+    pub fn show_keyboard_with_mode(&mut self, qh: &QueueHandle<Self>, mode: LayoutMode) {
+        let mode_changed = self.layout_mode != mode;
+        self.layout_mode = mode;
+        if self.is_visible {
+            if mode_changed && self.is_configured {
+                self.sync_layout_and_redraw(qh);
+            }
+        } else {
+            self.show_keyboard(qh);
+        }
+    }
+
+    pub fn toggle_keyboard_with_mode(&mut self, qh: &QueueHandle<Self>, mode: LayoutMode) {
+        if self.is_visible {
+            if self.layout_mode != mode {
+                self.layout_mode = mode;
+                if self.is_configured {
+                    self.sync_layout_and_redraw(qh);
+                }
+            } else {
+                self.hide_keyboard(qh);
+            }
+        } else {
+            self.layout_mode = mode;
+            self.show_keyboard(qh);
+        }
+    }
+
     pub fn show_keyboard_with_exclusivity(&mut self, qh: &QueueHandle<Self>, exclusive: bool) {
         self.config.general.exclusive_zone = exclusive;
         if self.is_visible {
@@ -368,6 +409,7 @@ impl WaylandState {
         let new_config = Config::load_or_create(None);
         self.theme = Theme::from(&new_config.theme);
         self.height = new_config.general.height;
+        self.layout_mode = LayoutMode::parse_mode(&new_config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
         self.config = new_config;
 
         if let Some(ref surface) = self.layer_surface {
@@ -543,7 +585,7 @@ impl WaylandState {
             self.layout = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
         } else {
             self.layout =
-                KeyboardLayout::get_layout_with_caps(self.current_layer, &self.suggest_engine.candidates, self.caps_lock);
+                KeyboardLayout::get_layout_for_mode(self.current_layer, &self.suggest_engine.candidates, self.caps_lock, self.layout_mode);
         }
         self.update_key_rects();
         self.redraw(qh);

@@ -121,13 +121,20 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                 IpcCommand::ShowMode(exclusive) => {
                     state.show_keyboard_with_exclusivity(&qh, exclusive)
                 }
+                IpcCommand::ShowWithMode(mode) => {
+                    state.show_keyboard_with_mode(&qh, mode);
+                }
                 IpcCommand::Hide => state.hide_keyboard(&qh),
                 IpcCommand::Toggle => state.toggle_keyboard(&qh),
                 IpcCommand::ToggleMode(exclusive) => {
                     state.toggle_keyboard_with_exclusivity(&qh, exclusive)
                 }
+                IpcCommand::ToggleWithMode(mode) => {
+                    state.toggle_keyboard_with_mode(&qh, mode);
+                }
                 IpcCommand::ToggleExclusivity => state.toggle_exclusivity(&qh),
                 IpcCommand::SetExclusivity(exclusive) => state.set_exclusivity(&qh, exclusive),
+                IpcCommand::SetLayoutMode(mode) => state.set_layout_mode(mode, &qh),
                 IpcCommand::Reload => state.reload_config(&qh),
                 IpcCommand::Quit => state.is_running = false,
                 IpcCommand::SwitchLayer(layer_name) => {

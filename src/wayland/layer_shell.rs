@@ -29,10 +29,8 @@ impl LayerShellHandler for WaylandState {
         self.height = effective_h;
         self.is_configured = true;
         if size_changed {
-            self.update_key_rects();
-        }
-
-        if self.is_visible {
+            self.sync_layout_and_redraw(qh);
+        } else if self.is_visible {
             self.redraw(qh);
         }
     }

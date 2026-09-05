@@ -4,15 +4,20 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
 
+use crate::layout::LayoutMode;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcCommand {
     Show,
     ShowMode(bool),
+    ShowWithMode(LayoutMode),
     Hide,
     Toggle,
     ToggleMode(bool),
+    ToggleWithMode(LayoutMode),
     ToggleExclusivity,
     SetExclusivity(bool),
+    SetLayoutMode(LayoutMode),
     Reload,
     SwitchLayer(String),
     Clipboard,
@@ -66,6 +71,12 @@ impl IpcServer {
                             let text = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                             let (resp, cmd) = match text.as_str() {
                                 "show" => ("OK: Shown\n", Some(IpcCommand::Show)),
+                                "show-mobile" | "show mobile" | "show --mobile" => {
+                                    ("OK: Shown Mobile\n", Some(IpcCommand::ShowWithMode(LayoutMode::Mobile)))
+                                }
+                                "show-desktop" | "show desktop" | "show --desktop" => {
+                                    ("OK: Shown Desktop\n", Some(IpcCommand::ShowWithMode(LayoutMode::Desktop)))
+                                }
                                 "show-tiled" | "show tiled" | "show --tiled" | "tiled" => {
                                     ("OK: Shown Tiled\n", Some(IpcCommand::ShowMode(true)))
                                 }
@@ -74,6 +85,12 @@ impl IpcServer {
                                 }
                                 "hide" => ("OK: Hidden\n", Some(IpcCommand::Hide)),
                                 "toggle" => ("OK: Toggled\n", Some(IpcCommand::Toggle)),
+                                "toggle-mobile" | "toggle mobile" | "toggle --mobile" => {
+                                    ("OK: Toggled Mobile\n", Some(IpcCommand::ToggleWithMode(LayoutMode::Mobile)))
+                                }
+                                "toggle-desktop" | "toggle desktop" | "toggle --desktop" => {
+                                    ("OK: Toggled Desktop\n", Some(IpcCommand::ToggleWithMode(LayoutMode::Desktop)))
+                                }
                                 "toggle-tiled" | "toggle tiled" | "toggle --tiled" => {
                                     ("OK: Toggled Tiled\n", Some(IpcCommand::ToggleMode(true)))
                                 }
@@ -92,6 +109,14 @@ impl IpcServer {
                                 "reload" => ("OK: Config Reloaded\n", Some(IpcCommand::Reload)),
                                 "clipboard" => ("OK: Clipboard\n", Some(IpcCommand::Clipboard)),
                                 "quit" => ("OK: Quitting\n", Some(IpcCommand::Quit)),
+                                s if s.starts_with("mode ") => {
+                                    let m_name = s.strip_prefix("mode ").unwrap().trim();
+                                    if let Some(m) = LayoutMode::parse_mode(m_name) {
+                                        ("OK: Mode Switched\n", Some(IpcCommand::SetLayoutMode(m)))
+                                    } else {
+                                        ("ERR: Unknown mode, expected 'desktop' or 'mobile'\n", None)
+                                    }
+                                }
                                 s if s.starts_with("layer ") => {
                                     let l_name = s.strip_prefix("layer ").unwrap().trim().to_string();
                                     ("OK: Layer Switched\n", Some(IpcCommand::SwitchLayer(l_name)))

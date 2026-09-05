@@ -37,6 +37,18 @@ png = "0.17"
 name = "preview"
 path = "examples/preview.rs"
 
+[[example]]
+name = "preview_portrait"
+path = "examples/preview_portrait.rs"
+
+[[example]]
+name = "preview_phone"
+path = "examples/preview_phone.rs"
+
+[[example]]
+name = "preview_poco"
+path = "examples/preview_poco.rs"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

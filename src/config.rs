@@ -25,6 +25,8 @@ pub struct GeneralConfig {
     pub exclusive_zone: bool,
     /// Active theme name (catppuccin, tokyo-night, oled, nord)
     pub theme_name: String,
+    /// Keyboard layout style: "desktop" (default Windows 11 style) or "mobile" (HeliBoard / Gboard style)
+    pub layout_mode: String,
 }
 
 impl Default for GeneralConfig {
@@ -36,6 +38,7 @@ impl Default for GeneralConfig {
             corner_radius: 0.0,
             exclusive_zone: true,
             theme_name: "catppuccin".to_string(),
+            layout_mode: "desktop".to_string(),
         }
     }
 }

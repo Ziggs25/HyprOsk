@@ -34,7 +34,10 @@ export global OskTheme {
     in-out property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
     in-out property <length> suggest-text-size: 21px;
     in-out property <length> label-size: 27px;
+    in-out property <length> functional-size: 21px;
     in-out property <length> sub-size: 14px;
+    in-out property <length> sub-offset-x: 10px;
+    in-out property <length> sub-offset-y: 6px;
     in-out property <length> icon-size: 24px;
     in-out property <length> pin-size: 14px;
     in-out property <length> key-radius: 16px;
@@ -214,7 +217,7 @@ component KeyVisual {
             visible: k.icon <= 0 && k.key-type != KeyType.suggestion;
             x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
-            font-size: k.is-functional ? 21px : OskTheme.label-size;
+            font-size: k.is-functional ? OskTheme.functional-size : OskTheme.label-size;
             font-weight: 400;
             color: OskTheme.text-color;
             horizontal-alignment: center;
@@ -232,7 +235,7 @@ component KeyVisual {
         }
         Text {
             visible: k.key-type != KeyType.suggestion && k.sub != "";
-            x: 10px; y: 6px; width: 40px; height: 18px;
+            x: OskTheme.sub-offset-x; y: OskTheme.sub-offset-y; width: 40px; height: 18px;
             text: k.sub;
             font-size: OskTheme.sub-size;
             color: OskTheme.sub-color;

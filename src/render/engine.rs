@@ -24,17 +24,18 @@ impl RenderEngine {
         total_height: u32,
         _theme: &Theme,
     ) -> Vec<Vec<(Rect, usize)>> {
-        let padding_x = 8.0;
-        let padding_y = 8.0;
-        let spacing = 8.0;
+        let is_mobile = layout.is_mobile() || total_width < 600;
+        let padding_x = if is_mobile { 3.5 } else { 8.0 };
+        let padding_y = if is_mobile { 4.0 } else { 8.0 };
+        let spacing = if is_mobile { 4.0 } else { 8.0 };
         let num_rows = layout.rows.len();
 
         if num_rows == 0 {
             return Vec::new();
         }
 
-        // Windows-11 OSK: top action bar is 46px, key rows 80px each.
-        let top_row_height = 46.0;
+        // Top action bar height: 38px on portrait/mobile, 46px on landscape.
+        let top_row_height = if is_mobile { 38.0 } else { 46.0 };
         let remaining_height = (total_height as f32 - (2.0 * padding_y) - top_row_height - (num_rows as f32 * spacing)).max(10.0);
         let key_row_height = (remaining_height / (num_rows - 1).max(1) as f32).max(10.0);
 
@@ -48,7 +49,12 @@ impl RenderEngine {
 
             if r_idx == 0 && row.keys.len() >= 4 {
                 let num_center = row.keys.len() - 4;
-                let action_width = ((total_width as f32 - 2.0 * padding_x - 6.0 * spacing) * (0.35 / (4.0 * 0.35 + 3.3))).round();
+                let action_width = if is_mobile {
+                    // In portrait/mobile, action buttons (gear, palette, clip, hide) are compact
+                    (row_height * 0.95).round().min(36.0)
+                } else {
+                    ((total_width as f32 - 2.0 * padding_x - 6.0 * spacing) * (0.35 / (4.0 * 0.35 + 3.3))).round()
+                };
 
                 // Left 2 buttons: Gear, Palette
                 let x0 = padding_x;
@@ -82,20 +88,44 @@ impl RenderEngine {
             } else {
                 let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
                 let num_keys = row.keys.len();
-                let avail_width = total_width as f32 - (2.0 * padding_x) - ((num_keys.saturating_sub(1)) as f32 * spacing);
 
-                let mut current_x = padding_x;
+                // Gboard / HeliBoard: Row 2 has 9 keys (a-l) centered against Row 1's 10 keys (q-p).
+                // When in mobile/portrait and a row has 9 keys of weight 1.0, use the exact single-key width
+                // from a 10-key row and center the entire 9-key row with equal left and right margins!
+                let is_centered_9_key_row = is_mobile && num_keys == 9 && (total_weights - 9.0).abs() < 0.05;
 
-                for (k_idx, key) in row.keys.iter().enumerate() {
-                    let key_width = (avail_width * (key.width_weight / total_weights)).max(10.0);
-                    let rect = Rect {
-                        x: current_x,
-                        y: current_y,
-                        w: key_width,
-                        h: row_height,
-                    };
-                    row_rects.push((rect, k_idx));
-                    current_x += key_width + spacing;
+                if is_centered_9_key_row {
+                    let w_10 = total_width as f32 - (2.0 * padding_x) - (9.0 * spacing);
+                    let single_key_w = (w_10 / 10.0).max(10.0);
+                    let row_w = 9.0 * single_key_w + 8.0 * spacing;
+                    let indent = ((total_width as f32 - row_w) * 0.5).max(padding_x);
+
+                    let mut current_x = indent;
+                    for (k_idx, _key) in row.keys.iter().enumerate() {
+                        let rect = Rect {
+                            x: current_x,
+                            y: current_y,
+                            w: single_key_w,
+                            h: row_height,
+                        };
+                        row_rects.push((rect, k_idx));
+                        current_x += single_key_w + spacing;
+                    }
+                } else {
+                    let avail_width = total_width as f32 - (2.0 * padding_x) - ((num_keys.saturating_sub(1)) as f32 * spacing);
+                    let mut current_x = padding_x;
+
+                    for (k_idx, key) in row.keys.iter().enumerate() {
+                        let key_width = (avail_width * (key.width_weight / total_weights)).max(10.0);
+                        let rect = Rect {
+                            x: current_x,
+                            y: current_y,
+                            w: key_width,
+                            h: row_height,
+                        };
+                        row_rects.push((rect, k_idx));
+                        current_x += key_width + spacing;
+                    }
                 }
             }
 

@@ -10,6 +10,46 @@ pub enum LayerId {
     Symbols2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LayoutMode {
+    /// Desktop layout (Windows 11 style with Esc, Tab, Ctrl, Alt, Win, Arrows)
+    #[default]
+    Desktop,
+    /// Mobile layout (HeliBoard / Gboard style with clean mobile ergonomics)
+    Mobile,
+}
+
+impl LayoutMode {
+    pub fn is_mobile(&self) -> bool {
+        matches!(self, LayoutMode::Mobile)
+    }
+
+    pub fn parse_mode(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "mobile" | "phone" | "portrait" | "gboard" | "heliboard" => Some(LayoutMode::Mobile),
+            "desktop" | "landscape" | "win11" | "full" => Some(LayoutMode::Desktop),
+            _ => None,
+        }
+    }
+}
+
+impl std::str::FromStr for LayoutMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_mode(s).ok_or_else(|| format!("Unknown layout mode '{}'. Expected 'desktop' or 'mobile'.", s))
+    }
+}
+
+impl std::fmt::Display for LayoutMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LayoutMode::Desktop => write!(f, "desktop"),
+            LayoutMode::Mobile => write!(f, "mobile"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyAction {
     Text(String),

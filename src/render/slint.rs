@@ -291,6 +291,32 @@ impl SlintScene {
         };
 
         if needs_rebuild {
+            let osk_theme = self.ui.global::<OskTheme>();
+            let is_mobile = layout.is_mobile() || width < 600;
+            if is_mobile {
+                // Smartphone / Mobile scaling (HeliBoard / Gboard proportions)
+                osk_theme.set_label_size(20.0);
+                osk_theme.set_functional_size(15.0);
+                osk_theme.set_suggest_text_size(15.0);
+                osk_theme.set_sub_size(10.5);
+                osk_theme.set_sub_offset_x(5.0);
+                osk_theme.set_sub_offset_y(4.0);
+                osk_theme.set_icon_size(20.0);
+                osk_theme.set_key_radius(6.0);
+                osk_theme.set_space_radius(12.0);
+            } else {
+                // Landscape / Desktop scaling
+                osk_theme.set_label_size(27.0);
+                osk_theme.set_functional_size(21.0);
+                osk_theme.set_suggest_text_size(21.0);
+                osk_theme.set_sub_size(14.0);
+                osk_theme.set_sub_offset_x(10.0);
+                osk_theme.set_sub_offset_y(6.0);
+                osk_theme.set_icon_size(24.0);
+                osk_theme.set_key_radius(16.0);
+                osk_theme.set_space_radius(20.0);
+            }
+
             let rects = RenderEngine::calculate_key_rects(layout, width, height, theme);
             let mut keys = Vec::new();
             let mut key_coords = Vec::new();

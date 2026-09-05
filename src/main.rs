@@ -31,6 +31,12 @@ enum Commands {
         /// Force floating/overlay mode
         #[arg(long, short = 'f', alias = "overlay", conflicts_with = "tiled")]
         floating: bool,
+        /// Switch to mobile layout (HeliBoard / Gboard style)
+        #[arg(long, conflicts_with = "desktop")]
+        mobile: bool,
+        /// Switch to desktop layout (Windows 11 style)
+        #[arg(long, conflicts_with = "mobile")]
+        desktop: bool,
     },
     /// Hide the on-screen keyboard
     Hide,
@@ -42,6 +48,17 @@ enum Commands {
         /// Force floating/overlay mode
         #[arg(long, short = 'f', alias = "overlay", conflicts_with = "tiled")]
         floating: bool,
+        /// Switch to mobile layout (HeliBoard / Gboard style)
+        #[arg(long, conflicts_with = "desktop")]
+        mobile: bool,
+        /// Switch to desktop layout (Windows 11 style)
+        #[arg(long, conflicts_with = "mobile")]
+        desktop: bool,
+    },
+    /// Switch keyboard layout mode directly (e.g. desktop, mobile)
+    Mode {
+        /// Layout mode name: "desktop" or "mobile"
+        mode: String,
     },
     /// Toggle or switch to tiled/exclusive mode
     Tiled,
@@ -91,8 +108,12 @@ fn main() -> anyhow::Result<()> {
             let conf_path = config.as_deref().or(cli.config.as_deref());
             hyprosk::run_daemon(conf_path)?;
         }
-        Some(Commands::Show { tiled, floating }) => {
-            let cmd = if tiled {
+        Some(Commands::Show { tiled, floating, mobile, desktop }) => {
+            let cmd = if mobile {
+                "show --mobile"
+            } else if desktop {
+                "show --desktop"
+            } else if tiled {
                 "show-tiled"
             } else if floating {
                 "show-floating"
@@ -106,8 +127,12 @@ fn main() -> anyhow::Result<()> {
             let resp = hyprosk::ipc::IpcServer::send_command("hide")?;
             println!("{}", resp.trim());
         }
-        Some(Commands::Toggle { tiled, floating }) => {
-            let cmd = if tiled {
+        Some(Commands::Toggle { tiled, floating, mobile, desktop }) => {
+            let cmd = if mobile {
+                "toggle --mobile"
+            } else if desktop {
+                "toggle --desktop"
+            } else if tiled {
                 "toggle-tiled"
             } else if floating {
                 "toggle-floating"
@@ -115,6 +140,10 @@ fn main() -> anyhow::Result<()> {
                 "toggle"
             };
             let resp = hyprosk::ipc::IpcServer::send_command(cmd)?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Mode { mode }) => {
+            let resp = hyprosk::ipc::IpcServer::send_command(&format!("mode {}", mode))?;
             println!("{}", resp.trim());
         }
         Some(Commands::Tiled) => {
