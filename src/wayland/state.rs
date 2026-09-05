@@ -819,15 +819,27 @@ impl WaylandState {
             }
             KeyAction::ArrowLeft => {
                 self.send_arrow_left();
+                self.repeat_key = Some(KeyAction::ArrowLeft);
+                self.repeat_start = Some(Instant::now());
+                self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::ArrowRight => {
                 self.send_arrow_right();
+                self.repeat_key = Some(KeyAction::ArrowRight);
+                self.repeat_start = Some(Instant::now());
+                self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::ArrowUp => {
                 self.send_arrow_up();
+                self.repeat_key = Some(KeyAction::ArrowUp);
+                self.repeat_start = Some(Instant::now());
+                self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::ArrowDown => {
                 self.send_arrow_down();
+                self.repeat_key = Some(KeyAction::ArrowDown);
+                self.repeat_start = Some(Instant::now());
+                self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::Copy => {
                 self.capture_clipboard();
@@ -912,7 +924,7 @@ impl WaylandState {
     }
 
     pub fn update_key_repeat(&mut self, qh: &QueueHandle<Self>) {
-        if let Some(KeyAction::Backspace) = self.repeat_key
+        if let Some(action) = self.repeat_key.clone()
             && let Some(start) = self.repeat_start
         {
             let delay = Duration::from_millis(self.config.behavior.repeat_delay_ms.max(200));
@@ -924,10 +936,27 @@ impl WaylandState {
                     None => true,
                 };
                 if should_fire {
-                    self.suggest_engine.pop_char();
-                    self.send_backspace();
+                    match action {
+                        KeyAction::Backspace => {
+                            self.suggest_engine.pop_char();
+                            self.send_backspace();
+                            self.sync_layout_and_redraw(qh);
+                        }
+                        KeyAction::ArrowLeft => {
+                            self.send_arrow_left();
+                        }
+                        KeyAction::ArrowRight => {
+                            self.send_arrow_right();
+                        }
+                        KeyAction::ArrowUp => {
+                            self.send_arrow_up();
+                        }
+                        KeyAction::ArrowDown => {
+                            self.send_arrow_down();
+                        }
+                        _ => {}
+                    }
                     self.last_repeat_at = Some(now);
-                    self.sync_layout_and_redraw(qh);
                 }
             }
         }
