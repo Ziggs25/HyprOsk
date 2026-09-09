@@ -49,9 +49,26 @@ pub fn create_layer_surface(
         None,
     );
 
-    layer_surface.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-    layer_surface.set_size(0, state.height);
-    layer_surface.set_margin(0, state.config.general.margin_horizontal, state.config.general.margin_bottom, state.config.general.margin_horizontal);
+    let (target_w, target_h, margin_b, margin_h) = if let Some(ref custom) = state.custom_layout {
+        let h = custom.height.unwrap_or(state.config.general.height);
+        let w = custom.width.unwrap_or(0);
+        let mb = custom.margin_bottom.unwrap_or(state.config.general.margin_bottom);
+        let mh = if custom.width.is_some() { 0 } else { state.config.general.margin_horizontal };
+        (w, h, mb, mh)
+    } else {
+        (0, state.config.general.height, state.config.general.margin_bottom, state.config.general.margin_horizontal)
+    };
+
+    state.height = target_h;
+    if target_w > 0 {
+        layer_surface.set_anchor(Anchor::BOTTOM);
+        layer_surface.set_size(target_w, target_h);
+        layer_surface.set_margin(0, 0, margin_b, 0);
+    } else {
+        layer_surface.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer_surface.set_size(0, target_h);
+        layer_surface.set_margin(0, margin_h, margin_b, margin_h);
+    }
     
     if state.config.general.exclusive_zone {
         layer_surface.set_exclusive_zone(state.height as i32);

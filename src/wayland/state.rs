@@ -37,7 +37,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 
 use crate::config::Config;
-use crate::layout::{key::KeyAction, KeyboardLayout, LayerId, LayoutMode};
+use crate::layout::{key::KeyAction, CustomLayoutFile, KeyboardLayout, LayerId, LayoutMode};
 use crate::render::engine::{Rect, RenderEngine};
 use crate::render::slint::SlintScene;
 use crate::render::theme::Theme;
@@ -112,6 +112,7 @@ pub struct WaylandState {
     pub im_state: InputMethodState,
     pub current_layer: LayerId,
     pub layout_mode: LayoutMode,
+    pub custom_layout: Option<CustomLayoutFile>,
     pub layout: KeyboardLayout,
     pub key_rects: Vec<Vec<(Rect, usize)>>,
     pub theme: Theme,
@@ -214,6 +215,9 @@ impl WaylandState {
             im_state: InputMethodState::default(),
             current_layer: LayerId::Lower,
             layout_mode,
+            custom_layout: config.general.layout_file.as_deref().and_then(|f| {
+                CustomLayoutFile::load_from_name_or_path(f).ok()
+            }),
             layout,
             key_rects,
             theme,
@@ -410,16 +414,41 @@ impl WaylandState {
         self.theme = Theme::from(&new_config.theme);
         self.height = new_config.general.height;
         self.layout_mode = LayoutMode::parse_mode(&new_config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
-        self.config = new_config;
+        self.custom_layout = new_config.general.layout_file.as_deref().and_then(|f| {
+            CustomLayoutFile::load_from_name_or_path(f).ok()
+        });
+        self.sync_surface_geometry();
 
+        if self.is_visible && self.is_configured {
+            self.sync_layout_and_redraw(qh);
+        }
+    }
+
+    pub fn sync_surface_geometry(&mut self) {
         if let Some(ref surface) = self.layer_surface {
-            surface.set_margin(
-                0,
-                self.config.general.margin_horizontal,
-                self.config.general.margin_bottom,
-                self.config.general.margin_horizontal,
-            );
-            surface.set_size(0, self.height);
+            use smithay_client_toolkit::shell::wlr_layer::Anchor;
+
+            let (target_w, target_h, margin_b, margin_h) = if let Some(ref custom) = self.custom_layout {
+                let h = custom.height.unwrap_or(self.config.general.height);
+                let w = custom.width.unwrap_or(0);
+                let mb = custom.margin_bottom.unwrap_or(self.config.general.margin_bottom);
+                let mh = if custom.width.is_some() { 0 } else { self.config.general.margin_horizontal };
+                (w, h, mb, mh)
+            } else {
+                (0, self.config.general.height, self.config.general.margin_bottom, self.config.general.margin_horizontal)
+            };
+
+            self.height = target_h;
+            if target_w > 0 {
+                surface.set_anchor(Anchor::BOTTOM);
+                surface.set_size(target_w, target_h);
+                surface.set_margin(0, 0, margin_b, 0);
+            } else {
+                surface.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+                surface.set_size(0, target_h);
+                surface.set_margin(0, margin_h, margin_b, margin_h);
+            }
+
             let zone = if self.is_visible && self.config.general.exclusive_zone {
                 self.height as i32
             } else {
@@ -428,10 +457,19 @@ impl WaylandState {
             surface.set_exclusive_zone(zone);
             surface.commit();
         }
+    }
 
+    pub fn load_layout(&mut self, name_or_path: &str, qh: &QueueHandle<Self>) -> anyhow::Result<()> {
+        let custom = CustomLayoutFile::load_from_name_or_path(name_or_path)?;
+        if let Some(mode) = LayoutMode::parse_mode(&custom.mode) {
+            self.layout_mode = mode;
+        }
+        self.custom_layout = Some(custom);
+        self.sync_surface_geometry();
         if self.is_visible && self.is_configured {
             self.sync_layout_and_redraw(qh);
         }
+        Ok(())
     }
 
     pub fn note_input(&mut self, is_touch: bool) {
@@ -583,6 +621,12 @@ impl WaylandState {
         if self.clipboard_mode {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
             self.layout = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
+        } else if let Some(ref custom) = self.custom_layout {
+            self.layout = custom.to_keyboard_layout(
+                self.current_layer,
+                &self.suggest_engine.candidates,
+                self.caps_lock,
+            );
         } else {
             self.layout =
                 KeyboardLayout::get_layout_for_mode(self.current_layer, &self.suggest_engine.candidates, self.caps_lock, self.layout_mode);
@@ -1061,9 +1105,8 @@ impl WaylandState {
     pub fn send_text(&mut self, text: &str) {
         let has_mods = (self.pending_mods & !Self::MOD_SHIFT) != 0;
         let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
-        let has_surrounding = self.im_state.surrounding_text.is_some();
         tracing::info!("send_text '{}' is_im={} has_mods={} surrounding={:?} cursor={}", text, is_im_active, has_mods, self.im_state.surrounding_text, self.im_state.cursor_pos);
-        let use_im = is_im_active && !has_mods && has_surrounding;
+        let use_im = is_im_active && !has_mods;
         if use_im
             && let Some(ref im) = self.input_method
         {

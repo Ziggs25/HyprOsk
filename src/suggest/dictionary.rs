@@ -178,8 +178,8 @@ impl Dictionary {
 
         // 4. Fallback search if fewer than 3 candidates:
         // Shorten prefix by 1 character to find related stem completions
-        if collector.count < 3 && prefix_lower.len() > 1 {
-            let short_prefix = &prefix_lower[..prefix_lower.len() - 1];
+        let short_prefix_opt = prefix_lower.char_indices().last().map(|(idx, _)| &prefix_lower[..idx]);
+        if collector.count < 3 && let Some(short_prefix) = short_prefix_opt && !short_prefix.is_empty() {
             let short_bytes = short_prefix.as_bytes();
             let short_start = match self.unigrams.binary_search_by(|entry| {
                 let w = self.get_word(entry);

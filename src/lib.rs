@@ -136,6 +136,11 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
                 IpcCommand::SetExclusivity(exclusive) => state.set_exclusivity(&qh, exclusive),
                 IpcCommand::SetLayoutMode(mode) => state.set_layout_mode(mode, &qh),
                 IpcCommand::Reload => state.reload_config(&qh),
+                IpcCommand::LoadLayout(name) => {
+                    if let Err(e) = state.load_layout(&name, &qh) {
+                        tracing::error!("Failed to load layout {}: {:?}", name, e);
+                    }
+                }
                 IpcCommand::Quit => state.is_running = false,
                 IpcCommand::SwitchLayer(layer_name) => {
                     let layer = match layer_name.to_lowercase().as_str() {

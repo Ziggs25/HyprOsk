@@ -295,10 +295,10 @@ impl SlintScene {
             let is_mobile = layout.is_mobile() || width < 600;
             if is_mobile {
                 // Smartphone / Mobile scaling (HeliBoard / Gboard proportions)
-                osk_theme.set_label_size(20.0);
-                osk_theme.set_functional_size(15.0);
-                osk_theme.set_suggest_text_size(15.0);
-                osk_theme.set_sub_size(10.5);
+                osk_theme.set_label_size(22.0);
+                osk_theme.set_functional_size(16.0);
+                osk_theme.set_suggest_text_size(16.0);
+                osk_theme.set_sub_size(11.0);
                 osk_theme.set_sub_offset_x(5.0);
                 osk_theme.set_sub_offset_y(4.0);
                 osk_theme.set_icon_size(20.0);
@@ -353,6 +353,8 @@ impl SlintScene {
                         key.label.as_str()
                     };
 
+                    let has_border = key.borders.or(layout.borders).unwrap_or(true);
+
                     keys.push(Key {
                         x: rect.x,
                         y: rect.y,
@@ -365,6 +367,7 @@ impl SlintScene {
                         is_pressed: is_active,
                         is_functional: key.is_special,
                         is_pinned: key.is_pinned,
+                        has_border,
                     });
                     key_coords.push((r_idx, k_idx));
                 }

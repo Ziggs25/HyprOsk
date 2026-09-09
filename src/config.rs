@@ -26,7 +26,15 @@ pub struct GeneralConfig {
     /// Active theme name (catppuccin, tokyo-night, oled, nord)
     pub theme_name: String,
     /// Keyboard layout style: "desktop" (default Windows 11 style) or "mobile" (HeliBoard / Gboard style)
+    #[serde(default = "default_layout_mode")]
     pub layout_mode: String,
+    /// Path or name of custom JSON layout file (looked up in ~/.config/hyprosk/layouts/<name>.json)
+    #[serde(default)]
+    pub layout_file: Option<String>,
+}
+
+fn default_layout_mode() -> String {
+    "desktop".to_string()
 }
 
 impl Default for GeneralConfig {
@@ -39,6 +47,7 @@ impl Default for GeneralConfig {
             exclusive_zone: true,
             theme_name: "catppuccin".to_string(),
             layout_mode: "desktop".to_string(),
+            layout_file: None,
         }
     }
 }
@@ -147,10 +156,18 @@ impl Config {
             .unwrap_or_else(Self::default_config_path);
 
         if config_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&config_path) {
-                if let Ok(config) = toml::from_str(&content) {
-                    tracing::info!("Loaded configuration from {:?}", config_path);
-                    return config;
+            match std::fs::read_to_string(&config_path) {
+                Ok(content) => match toml::from_str(&content) {
+                    Ok(config) => {
+                        tracing::info!("Loaded configuration from {:?}", config_path);
+                        return config;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to parse config file at {:?}: {}", config_path, e);
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Failed to read config file at {:?}: {}", config_path, e);
                 }
             }
         }

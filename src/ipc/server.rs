@@ -19,6 +19,7 @@ pub enum IpcCommand {
     SetExclusivity(bool),
     SetLayoutMode(LayoutMode),
     Reload,
+    LoadLayout(String),
     SwitchLayer(String),
     Clipboard,
     Quit,
@@ -116,6 +117,10 @@ impl IpcServer {
                                     } else {
                                         ("ERR: Unknown mode, expected 'desktop' or 'mobile'\n", None)
                                     }
+                                }
+                                s if s.starts_with("layout ") => {
+                                    let l_name = s.strip_prefix("layout ").unwrap().trim().to_string();
+                                    ("OK: Layout Loaded\n", Some(IpcCommand::LoadLayout(l_name)))
                                 }
                                 s if s.starts_with("layer ") => {
                                     let l_name = s.strip_prefix("layer ").unwrap().trim().to_string();

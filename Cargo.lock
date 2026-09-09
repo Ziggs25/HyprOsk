@@ -1625,6 +1625,7 @@ dependencies = [
  "nix 0.29.0",
  "png 0.17.16",
  "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "smithay-client-toolkit",

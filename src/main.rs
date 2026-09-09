@@ -60,6 +60,11 @@ enum Commands {
         /// Layout mode name: "desktop" or "mobile"
         mode: String,
     },
+    /// Load a custom keyboard layout JSON from ~/.config/hyprosk/layouts/<name>.json or file path
+    Layout {
+        /// Name of the layout in ~/.config/hyprosk/layouts/<name>.json or path to .json file
+        name: String,
+    },
     /// Toggle or switch to tiled/exclusive mode
     Tiled,
     /// Toggle or switch to floating/overlay mode
@@ -144,6 +149,10 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Mode { mode }) => {
             let resp = hyprosk::ipc::IpcServer::send_command(&format!("mode {}", mode))?;
+            println!("{}", resp.trim());
+        }
+        Some(Commands::Layout { name }) => {
+            let resp = hyprosk::ipc::IpcServer::send_command(&format!("layout {}", name))?;
             println!("{}", resp.trim());
         }
         Some(Commands::Tiled) => {

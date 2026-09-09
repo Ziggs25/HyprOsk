@@ -1,4 +1,5 @@
 import "fonts/DejaVuSans.ttf";
+import "fonts/DejaVuSans-Bold.ttf";
 
 export enum KeyType {
     standard,
@@ -21,6 +22,7 @@ export struct Key {
     is-pressed: bool,
     is-functional: bool,
     is-pinned: bool,
+    has-border: bool,
 }
 
 export global OskTheme {
@@ -29,7 +31,7 @@ export global OskTheme {
     in-out property <color> key-bg: #1c1c1c;
     in-out property <color> key-bg-pressed: #141414;
     in-out property <color> text-color: #fff;
-    in-out property <color> sub-color: #8c8c8c;
+    in-out property <color> sub-color: #cdd6f4;
     in-out property <color> suggest-bg: rgba(255, 255, 255, 0.05);
     in-out property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
     in-out property <length> suggest-text-size: 21px;
@@ -198,7 +200,7 @@ component KeyVisual {
         height: k.h - (k.is-pressed ? 4px : 0px);
         background: k.key-type == KeyType.suggestion
             ? (k.is-pressed ? OskTheme.suggest-bg-pressed : OskTheme.suggest-bg)
-            : (k.icon == 34 ? #363a4f : (k.is-pressed ? OskTheme.key-bg-pressed : OskTheme.key-bg));
+            : (k.icon == 34 ? #363a4f : (k.is-pressed ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent)));
         border-color: k.icon == 34 ? #89b4fa : (k.is-pressed ? #585b70 : transparent);
         border-width: (k.icon == 34 || k.is-pressed) ? 1.5px : 0px;
         border-radius: k.key-type == KeyType.suggestion ? 8px : (k.key-type == KeyType.space ? OskTheme.space-radius : OskTheme.key-radius);
@@ -217,8 +219,9 @@ component KeyVisual {
             visible: k.icon <= 0 && k.key-type != KeyType.suggestion;
             x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
+            font-family: "DejaVu Sans";
             font-size: k.is-functional ? OskTheme.functional-size : OskTheme.label-size;
-            font-weight: 400;
+            font-weight: 500;
             color: OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -227,6 +230,7 @@ component KeyVisual {
             visible: k.key-type == KeyType.suggestion;
             x: 0; y: 0; width: parent.width; height: parent.height;
             text: k.label;
+            font-family: "DejaVu Sans";
             font-size: OskTheme.suggest-text-size;
             font-weight: 500;
             color: OskTheme.text-color;
@@ -237,7 +241,9 @@ component KeyVisual {
             visible: k.key-type != KeyType.suggestion && k.sub != "";
             x: OskTheme.sub-offset-x; y: OskTheme.sub-offset-y; width: 40px; height: 18px;
             text: k.sub;
+            font-family: "DejaVu Sans";
             font-size: OskTheme.sub-size;
+            font-weight: 500;
             color: OskTheme.sub-color;
         }
     }
@@ -245,8 +251,17 @@ component KeyVisual {
 
 export component OskUi inherits Window {
     default-font-family: "DejaVu Sans";
-    default-font-size: 27px;
+    default-font-size: 22px;
+    default-font-weight: 500;
     background: transparent;
+
+    // Pre-cache exact rasterization sizes for crisp font rendering (avoids fuzzy runtime bitmap downscaling)
+    Text { visible: false; text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?`~•√π÷×¶∆£¢€¥^°§«»¿≠±©®™⌫⏎⇧⇪␣⌨◀▶▲▼123"; font-size: 22px; font-weight: 500; }
+    Text { visible: false; text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?`~•√π÷×¶∆£¢€¥^°§«»¿≠±©®™⌫⏎⇧⇪␣⌨◀▶▲▼123"; font-size: 27px; font-weight: 500; }
+    Text { visible: false; text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?`~•√π÷×¶∆£¢€¥^°§«»¿≠±©®™⌫⏎⇧⇪␣⌨◀▶▲▼123"; font-size: 16px; font-weight: 500; }
+    Text { visible: false; text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?`~•√π÷×¶∆£¢€¥^°§«»¿≠±©®™⌫⏎⇧⇪␣⌨◀▶▲▼123"; font-size: 21px; font-weight: 500; }
+    Text { visible: false; text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?`~•√π÷×¶∆£¢€¥^°§«»¿≠±©®™⌫⏎⇧⇪␣⌨◀▶▲▼123"; font-size: 11px; font-weight: 500; }
+    Text { visible: false; text: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':\",./<>?`~•√π÷×¶∆£¢€¥^°§«»¿≠±©®™⌫⏎⇧⇪␣⌨◀▶▲▼123"; font-size: 14px; font-weight: 500; }
 
     in-out property <[Key]> keys;
     in property <bool> show-clipboard: false;

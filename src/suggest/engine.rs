@@ -104,7 +104,7 @@ impl SuggestEngine {
     }
 
     pub fn sync_with_text(&mut self, surrounding: &str, cursor_bytes: usize) {
-        let valid_len = surrounding.len().min(cursor_bytes);
+        let valid_len = surrounding.floor_char_boundary(surrounding.len().min(cursor_bytes));
         let before = &surrounding[..valid_len];
         if before.is_empty() {
             self.clear();

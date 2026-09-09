@@ -101,6 +101,22 @@ pub struct Key {
     pub is_suggestion: bool,
     pub is_clipboard: bool,
     pub is_pinned: bool,
+    /// Custom spacing/gap to the right of this key in pixels
+    pub margin_right: Option<f32>,
+    /// Custom spacing/gap to the left of this key in pixels
+    pub margin_left: Option<f32>,
+    /// Whether this key has borders rendered (borderless if false)
+    pub borders: Option<bool>,
+    /// Optional custom border width in pixels
+    pub border_width: Option<f32>,
+    /// Optional font scale multiplier or size (e.g. 1.0, 1.5, 2.0)
+    pub font_size: Option<f32>,
+    /// Optional secondary font scale multiplier or size
+    pub secondary_font_size: Option<f32>,
+    /// Optional explicit height for this key in pixels
+    pub height: Option<f32>,
+    /// Optional explicit width for this key in pixels
+    pub width_px: Option<f32>,
 }
 
 impl Key {
@@ -116,6 +132,14 @@ impl Key {
             is_suggestion: false,
             is_clipboard: false,
             is_pinned: false,
+            margin_right: None,
+            margin_left: None,
+            borders: None,
+            border_width: None,
+            font_size: None,
+            secondary_font_size: None,
+            height: None,
+            width_px: None,
         }
     }
 
@@ -132,6 +156,14 @@ impl Key {
             is_suggestion: false,
             is_clipboard: false,
             is_pinned: false,
+            margin_right: None,
+            margin_left: None,
+            borders: None,
+            border_width: None,
+            font_size: None,
+            secondary_font_size: None,
+            height: None,
+            width_px: None,
         }
     }
 
@@ -147,6 +179,14 @@ impl Key {
             is_suggestion: true,
             is_clipboard: false,
             is_pinned: false,
+            margin_right: None,
+            margin_left: None,
+            borders: None,
+            border_width: None,
+            font_size: None,
+            secondary_font_size: None,
+            height: None,
+            width_px: None,
         }
     }
 
