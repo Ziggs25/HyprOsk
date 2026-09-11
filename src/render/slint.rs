@@ -317,6 +317,42 @@ impl SlintScene {
                 osk_theme.set_space_radius(20.0);
             }
 
+            let blur_enabled = layout.blur.unwrap_or(false);
+            if blur_enabled {
+                let dock_alpha = (layout.opacity.unwrap_or(0.60) * 255.0).clamp(0.0, 255.0) as u8;
+                let key_alpha = (layout.key_opacity.unwrap_or(0.50) * 255.0).clamp(0.0, 255.0) as u8;
+
+                osk_theme.set_dock_bg(slint::Color::from_argb_u8(
+                    dock_alpha,
+                    theme.background.r,
+                    theme.background.g,
+                    theme.background.b,
+                ));
+                osk_theme.set_clipboard_bg(slint::Color::from_argb_u8(
+                    dock_alpha,
+                    (theme.background.r as f32 * 0.8) as u8,
+                    (theme.background.g as f32 * 0.8) as u8,
+                    (theme.background.b as f32 * 0.8) as u8,
+                ));
+                osk_theme.set_key_bg(slint::Color::from_argb_u8(
+                    key_alpha,
+                    theme.key_background.r,
+                    theme.key_background.g,
+                    theme.key_background.b,
+                ));
+                osk_theme.set_key_bg_pressed(slint::Color::from_argb_u8(
+                    170,
+                    theme.key_pressed.r,
+                    theme.key_pressed.g,
+                    theme.key_pressed.b,
+                ));
+            } else {
+                osk_theme.set_dock_bg(slint::Color::from_argb_u8(255, 0, 0, 0));
+                osk_theme.set_clipboard_bg(slint::Color::from_argb_u8(255, 17, 17, 17));
+                osk_theme.set_key_bg(slint::Color::from_argb_u8(255, 28, 28, 28));
+                osk_theme.set_key_bg_pressed(slint::Color::from_argb_u8(255, 20, 20, 20));
+            }
+
             let rects = RenderEngine::calculate_key_rects(layout, width, height, theme);
             let mut keys = Vec::new();
             let mut key_coords = Vec::new();

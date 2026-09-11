@@ -180,10 +180,20 @@ impl WaylandState {
         ).expect("Failed to create SHM slot pool");
         let theme = Theme::from(&config.theme);
         let height = config.general.height;
-        let suggest_engine = SuggestEngine::new();
         let layout_mode = LayoutMode::parse_mode(&config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
-        let layout = KeyboardLayout::get_layout_for_mode(LayerId::Lower, &[], false, layout_mode);
+        let custom_layout = config
+            .general
+            .layout_file
+            .as_deref()
+            .or(Some(config.general.layout_mode.as_str()))
+            .and_then(|f| CustomLayoutFile::load_from_name_or_path(f).ok());
+        let layout = if let Some(ref custom) = custom_layout {
+            custom.to_keyboard_layout(LayerId::Lower, &[], false)
+        } else {
+            KeyboardLayout::get_layout_for_mode(LayerId::Lower, &[], false, layout_mode)
+        };
         let key_rects = RenderEngine::calculate_key_rects(&layout, 1000, height, &theme);
+        let suggest_engine = SuggestEngine::new();
 
         Self {
             registry_state,
@@ -215,9 +225,7 @@ impl WaylandState {
             im_state: InputMethodState::default(),
             current_layer: LayerId::Lower,
             layout_mode,
-            custom_layout: config.general.layout_file.as_deref().and_then(|f| {
-                CustomLayoutFile::load_from_name_or_path(f).ok()
-            }),
+            custom_layout,
             layout,
             key_rects,
             theme,
@@ -309,6 +317,16 @@ impl WaylandState {
     pub fn set_layout_mode(&mut self, mode: LayoutMode, qh: &QueueHandle<Self>) {
         if self.layout_mode != mode {
             self.layout_mode = mode;
+            let mode_str = match mode {
+                LayoutMode::Mobile => "mobile",
+                LayoutMode::Desktop => "desktop",
+            };
+            if let Ok(custom) = CustomLayoutFile::load_from_name_or_path(mode_str) {
+                self.custom_layout = Some(custom);
+            } else if self.config.general.layout_file.is_none() {
+                self.custom_layout = None;
+            }
+            self.sync_surface_geometry();
             tracing::info!("HyprOsk layout mode set to: {:?}", mode);
             if self.is_visible && self.is_configured {
                 self.sync_layout_and_redraw(qh);
@@ -318,7 +336,19 @@ impl WaylandState {
 
     pub fn show_keyboard_with_mode(&mut self, qh: &QueueHandle<Self>, mode: LayoutMode) {
         let mode_changed = self.layout_mode != mode;
-        self.layout_mode = mode;
+        if mode_changed {
+            self.layout_mode = mode;
+            let mode_str = match mode {
+                LayoutMode::Mobile => "mobile",
+                LayoutMode::Desktop => "desktop",
+            };
+            if let Ok(custom) = CustomLayoutFile::load_from_name_or_path(mode_str) {
+                self.custom_layout = Some(custom);
+            } else if self.config.general.layout_file.is_none() {
+                self.custom_layout = None;
+            }
+            self.sync_surface_geometry();
+        }
         if self.is_visible {
             if mode_changed && self.is_configured {
                 self.sync_layout_and_redraw(qh);
@@ -329,9 +359,22 @@ impl WaylandState {
     }
 
     pub fn toggle_keyboard_with_mode(&mut self, qh: &QueueHandle<Self>, mode: LayoutMode) {
+        let mode_changed = self.layout_mode != mode;
+        if mode_changed {
+            self.layout_mode = mode;
+            let mode_str = match mode {
+                LayoutMode::Mobile => "mobile",
+                LayoutMode::Desktop => "desktop",
+            };
+            if let Ok(custom) = CustomLayoutFile::load_from_name_or_path(mode_str) {
+                self.custom_layout = Some(custom);
+            } else if self.config.general.layout_file.is_none() {
+                self.custom_layout = None;
+            }
+            self.sync_surface_geometry();
+        }
         if self.is_visible {
-            if self.layout_mode != mode {
-                self.layout_mode = mode;
+            if mode_changed {
                 if self.is_configured {
                     self.sync_layout_and_redraw(qh);
                 }
@@ -339,7 +382,6 @@ impl WaylandState {
                 self.hide_keyboard(qh);
             }
         } else {
-            self.layout_mode = mode;
             self.show_keyboard(qh);
         }
     }
@@ -414,9 +456,15 @@ impl WaylandState {
         self.theme = Theme::from(&new_config.theme);
         self.height = new_config.general.height;
         self.layout_mode = LayoutMode::parse_mode(&new_config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
-        self.custom_layout = new_config.general.layout_file.as_deref().and_then(|f| {
-            CustomLayoutFile::load_from_name_or_path(f).ok()
-        });
+        self.custom_layout = new_config
+            .general
+            .layout_file
+            .as_deref()
+            .or(Some(new_config.general.layout_mode.as_str()))
+            .and_then(|f| {
+                CustomLayoutFile::load_from_name_or_path(f).ok()
+            });
+        self.config = new_config;
         self.sync_surface_geometry();
 
         if self.is_visible && self.is_configured {

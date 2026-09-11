@@ -141,6 +141,15 @@ pub struct CustomLayoutFile {
     /// Global key width override in pixels
     #[serde(default)]
     pub key_width: Option<f32>,
+    /// Whether to enable semi-transparent background for Hyprland compositor blurring
+    #[serde(default)]
+    pub blur: Option<bool>,
+    /// Optional background opacity override (e.g. 0.60 for 60% opacity)
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// Optional key background opacity override (e.g. 0.50 for 50% opacity)
+    #[serde(default)]
+    pub key_opacity: Option<f32>,
     /// Layers map: "lower", "upper", "symbols", "symbols2"
     #[serde(default)]
     pub layers: HashMap<String, Vec<MatrixRow>>,
@@ -154,18 +163,80 @@ fn default_layout_mode() -> String {
     "mobile".to_string()
 }
 
+pub const DEFAULT_DESKTOP_LAYOUT: &str = include_str!("../../layouts/desktop.json");
+pub const DEFAULT_MOBILE_LAYOUT: &str = include_str!("../../layouts/mobile.json");
+
 impl CustomLayoutFile {
     /// Locate and load a layout from either:
     /// 1. An explicit file path: `/path/to/layout.json` or `./my_layout.json`
     /// 2. A layout name in `~/.config/hyprosk/layouts/<name>.json`
+    /// 3. Embedded default layout ("desktop" or "mobile") if file does not exist on disk
     pub fn load_from_name_or_path(name_or_path: &str) -> anyhow::Result<Self> {
         let path = Self::resolve_layout_path(name_or_path);
-        tracing::info!("Loading custom layout from {:?}", path);
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("Failed to read layout file at {:?}: {}", path, e))?;
-        let parsed: Self = serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse layout JSON in {:?}: {}", path, e))?;
-        Ok(parsed)
+        if path.exists() {
+            tracing::info!("Loading custom layout from {:?}", path);
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("Failed to read layout file at {:?}: {}", path, e))?;
+            let parsed: Self = serde_json::from_str(&content)
+                .map_err(|e| anyhow::anyhow!("Failed to parse layout JSON in {:?}: {}", path, e))?;
+            return Ok(parsed);
+        }
+
+        // Embedded fallback for standard layouts if not yet created on disk
+        let clean_name = name_or_path.trim_end_matches(".json");
+        match clean_name {
+            "desktop" => {
+                tracing::info!("Using embedded default desktop layout");
+                let parsed: Self = serde_json::from_str(DEFAULT_DESKTOP_LAYOUT)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse embedded desktop layout JSON: {}", e))?;
+                Ok(parsed)
+            }
+            "mobile" => {
+                tracing::info!("Using embedded default mobile layout");
+                let parsed: Self = serde_json::from_str(DEFAULT_MOBILE_LAYOUT)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse embedded mobile layout JSON: {}", e))?;
+                Ok(parsed)
+            }
+            _ => Err(anyhow::anyhow!("Layout file not found at {:?}", path)),
+        }
+    }
+
+    /// Load default layout for a given LayoutMode (reads from disk if present, falls back to embedded)
+    pub fn get_default_layout(mode: LayoutMode) -> Self {
+        let name = match mode {
+            LayoutMode::Mobile => "mobile",
+            LayoutMode::Desktop => "desktop",
+        };
+        Self::load_from_name_or_path(name).unwrap_or_else(|_| {
+            let raw = match mode {
+                LayoutMode::Mobile => DEFAULT_MOBILE_LAYOUT,
+                LayoutMode::Desktop => DEFAULT_DESKTOP_LAYOUT,
+            };
+            serde_json::from_str(raw).expect("embedded default layout must be valid JSON")
+        })
+    }
+
+    /// Ensure default layout files exist in ~/.config/hyprosk/layouts/ on first run
+    pub fn ensure_default_layouts_exist() {
+        let base_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            PathBuf::from(xdg).join("hyprosk/layouts")
+        } else if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".config/hyprosk/layouts")
+        } else {
+            return;
+        };
+
+        if !base_dir.exists() {
+            let _ = std::fs::create_dir_all(&base_dir);
+        }
+        let desktop_file = base_dir.join("desktop.json");
+        if !desktop_file.exists() {
+            let _ = std::fs::write(&desktop_file, DEFAULT_DESKTOP_LAYOUT);
+        }
+        let mobile_file = base_dir.join("mobile.json");
+        if !mobile_file.exists() {
+            let _ = std::fs::write(&mobile_file, DEFAULT_MOBILE_LAYOUT);
+        }
     }
 
     /// Resolve layout name or path to a filesystem `PathBuf`.
@@ -189,7 +260,17 @@ impl CustomLayoutFile {
             format!("{}.json", name_or_path)
         };
 
-        base_dir.join(filename)
+        let user_path = base_dir.join(&filename);
+        if user_path.exists() {
+            return user_path;
+        }
+
+        let local_path = PathBuf::from("layouts").join(&filename);
+        if local_path.exists() {
+            return local_path;
+        }
+
+        user_path
     }
 
     /// Convert custom layout layer into a runtime `KeyboardLayout`
@@ -258,6 +339,9 @@ impl CustomLayoutFile {
             secondary_font_size: self.secondary_font_size,
             key_height: self.key_height,
             key_width: self.key_width,
+            blur: self.blur,
+            opacity: self.opacity,
+            key_opacity: self.key_opacity,
         };
 
         // Always prepend the standard top action/suggestion bar
@@ -541,5 +625,47 @@ mod tests {
             let labels: Vec<&str> = r1.keys.iter().map(|k| k.label.as_str()).collect();
             assert_eq!(labels, vec!["~", "`", "|", "•", "√", "π", "÷", "×", "¶", "∆"]);
         }
+    }
+
+    #[test]
+    fn test_desktop_layout() {
+        let layout_file = CustomLayoutFile::load_from_name_or_path("desktop").expect("load desktop layout");
+        assert_eq!(layout_file.name, "Desktop Layout");
+        assert_eq!(layout_file.mode, "desktop");
+        assert_eq!(layout_file.borders, Some(true));
+
+        let k_layout = layout_file.to_keyboard_layout(LayerId::Lower, &[], false);
+        // Top bar + 4 keyboard rows
+        assert_eq!(k_layout.rows.len(), 5);
+
+        // Row 1: Esc, q..p, ⌫ (12 keys)
+        let r1 = &k_layout.rows[1];
+        assert_eq!(r1.keys.len(), 12);
+        assert_eq!(r1.keys[0].label, "Esc");
+        assert_eq!(r1.keys[0].action, KeyAction::Escape);
+        assert_eq!(r1.keys[1].label, "q");
+        assert_eq!(r1.keys[1].secondary_label.as_deref(), Some("1"));
+        assert_eq!(r1.keys[11].label, "⌫");
+        assert_eq!(r1.keys[11].action, KeyAction::Backspace);
+
+        // Row 2: Tab, a..l, ⏎ (11 keys)
+        let r2 = &k_layout.rows[2];
+        assert_eq!(r2.keys.len(), 11);
+        assert_eq!(r2.keys[0].label, "Tab");
+        assert_eq!(r2.keys[10].label, "⏎");
+
+        // Row 3: ⇧, z..m, ⇧ (9 keys)
+        let r3 = &k_layout.rows[3];
+        assert_eq!(r3.keys.len(), 9);
+        assert_eq!(r3.keys[0].label, "⇧");
+        assert_eq!(r3.keys[8].label, "⇧");
+
+        // Row 4: &123, Ctrl, ⊞, Alt, Space, 🎤, ◀, ▶ (8 keys)
+        let r4 = &k_layout.rows[4];
+        assert_eq!(r4.keys.len(), 8);
+        assert_eq!(r4.keys[0].label, "&123");
+        assert_eq!(r4.keys[4].label, "Space");
+        assert_eq!(r4.keys[4].action, KeyAction::Space);
+        assert!((r4.keys[4].width_weight - 7.2).abs() < 0.01);
     }
 }

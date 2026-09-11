@@ -26,7 +26,8 @@ fn close(a: [u8; 4], e: [u8; 4], tol: i32) -> bool {
 
 fn main() {
     let suggestions: Vec<String> = vec!["thanks".into(), "bro".into(), "beech".into()];
-    let layout = KeyboardLayout::get_layout(LayerId::Lower, &suggestions);
+    let mut layout = KeyboardLayout::get_layout(LayerId::Lower, &suggestions);
+    layout.blur = Some(false);
     let theme = Theme::catppuccin_mocha();
     let rects = RenderEngine::calculate_key_rects(&layout, W, H, &theme);
 

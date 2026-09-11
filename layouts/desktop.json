@@ -1,0 +1,177 @@
+{
+  "name": "Desktop Layout",
+  "mode": "desktop",
+  "blur": true,
+  "opacity": 0.90,
+  "key_opacity": 0.70,
+  "margin_bottom": 0,
+  "key_spacing": 5.0,
+  "row_spacing": 5.0,
+  "padding_x": 8.0,
+  "padding_y": 8.0,
+  "borders": true,
+  "layers": {
+    "lower": [
+      [
+        {"key": "Esc", "action": "escape", "width": 1.1},
+        {"key": "q", "sub": "1"},
+        {"key": "w", "sub": "2"},
+        {"key": "e", "sub": "3"},
+        {"key": "r", "sub": "4"},
+        {"key": "t", "sub": "5"},
+        {"key": "y", "sub": "6"},
+        {"key": "u", "sub": "7"},
+        {"key": "i", "sub": "8"},
+        {"key": "o", "sub": "9"},
+        {"key": "p", "sub": "0"},
+        {"key": "⌫", "action": "backspace", "width": 1.5}
+      ],
+      [
+        {"key": "Tab", "action": "tab", "width": 1.5},
+        {"key": "a", "sub": "@"},
+        {"key": "s", "sub": "#"},
+        {"key": "d", "sub": "$"},
+        {"key": "f", "sub": "%"},
+        {"key": "g", "sub": "&"},
+        {"key": "h", "sub": "-"},
+        {"key": "j", "sub": "+"},
+        {"key": "k", "sub": "("},
+        {"key": "l", "sub": ")"},
+        {"key": "⏎", "action": "enter", "width": 2.1}
+      ],
+      [
+        {"key": "⇧", "action": "shift", "width": 2.3},
+        {"key": "z", "sub": "*"},
+        {"key": "x", "sub": "\""},
+        {"key": "c", "sub": "'"},
+        {"key": "v", "sub": ":"},
+        {"key": "b", "sub": ";"},
+        {"key": "n", "sub": "!"},
+        {"key": "m", "sub": "?"},
+        {"key": "⇧", "action": "shift", "width": 2.3}
+      ],
+      [
+        {"key": "&123", "action": "symbols", "width": 1.25},
+        {"key": "Ctrl", "action": "ctrl", "width": 1.1},
+        {"key": "⊞", "action": "win", "width": 1.1},
+        {"key": "Alt", "action": "alt", "width": 1.1},
+        {"key": "Space", "action": "space", "width": 7.2},
+        {"key": "🎤", "action": "none", "width": 1.1},
+        {"key": "◀", "action": "left", "width": 1.1},
+        {"key": "▶", "action": "right", "width": 1.1}
+      ]
+    ],
+    "upper": [
+      [
+        {"key": "Esc", "action": "escape", "width": 1.1},
+        {"key": "Q", "sub": "1"},
+        {"key": "W", "sub": "2"},
+        {"key": "E", "sub": "3"},
+        {"key": "R", "sub": "4"},
+        {"key": "T", "sub": "5"},
+        {"key": "Y", "sub": "6"},
+        {"key": "U", "sub": "7"},
+        {"key": "I", "sub": "8"},
+        {"key": "O", "sub": "9"},
+        {"key": "P", "sub": "0"},
+        {"key": "⌫", "action": "backspace", "width": 1.5}
+      ],
+      [
+        {"key": "Tab", "action": "tab", "width": 1.5},
+        {"key": "A", "sub": "@"},
+        {"key": "S", "sub": "#"},
+        {"key": "D", "sub": "$"},
+        {"key": "F", "sub": "%"},
+        {"key": "G", "sub": "&"},
+        {"key": "H", "sub": "-"},
+        {"key": "J", "sub": "+"},
+        {"key": "K", "sub": "("},
+        {"key": "L", "sub": ")"},
+        {"key": "⏎", "action": "enter", "width": 2.1}
+      ],
+      [
+        {"key": "⇧", "action": "shift", "width": 2.3},
+        {"key": "Z", "sub": "*"},
+        {"key": "X", "sub": "\""},
+        {"key": "C", "sub": "'"},
+        {"key": "V", "sub": ":"},
+        {"key": "B", "sub": ";"},
+        {"key": "N", "sub": "!"},
+        {"key": "M", "sub": "?"},
+        {"key": "⇧", "action": "shift", "width": 2.3}
+      ],
+      [
+        {"key": "&123", "action": "symbols", "width": 1.25},
+        {"key": "Ctrl", "action": "ctrl", "width": 1.1},
+        {"key": "⊞", "action": "win", "width": 1.1},
+        {"key": "Alt", "action": "alt", "width": 1.1},
+        {"key": "Space", "action": "space", "width": 7.2},
+        {"key": "🎤", "action": "none", "width": 1.1},
+        {"key": "◀", "action": "left", "width": 1.1},
+        {"key": "▶", "action": "right", "width": 1.1}
+      ]
+    ],
+    "symbols": [
+      [
+        {"key": "Esc", "action": "escape", "width": 1.1},
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+        {"key": "⌫", "action": "backspace", "width": 1.5}
+      ],
+      [
+        {"key": "Tab", "action": "tab", "width": 1.5},
+        "!", "@", "#", "$", "^", "&", "_", "-", "=", "+",
+        {"key": "⏎", "action": "enter", "width": 2.1}
+      ],
+      [
+        {"key": "=\\<", "action": "symbols2", "width": 2.0},
+        ";", ":", "(", ")", "/", "'", "\"", "?",
+        {"key": "Home", "action": "home", "width": 1.0},
+        {"key": "▲", "action": "up", "width": 1.1},
+        {"key": "End", "action": "end", "width": 1.0}
+      ],
+      [
+        {"key": "abc", "action": "lower", "width": 1.25},
+        {"key": "Ctrl", "action": "ctrl", "width": 1.1},
+        {"key": "⊞", "action": "win", "width": 1.1},
+        {"key": "Alt", "action": "alt", "width": 1.1},
+        {"key": ",", "width": 1.0},
+        {"key": "Space", "action": "space", "width": 7.2},
+        {"key": ".", "width": 1.0},
+        {"key": "◀", "action": "left", "width": 1.1},
+        {"key": "▼", "action": "down", "width": 1.1},
+        {"key": "▶", "action": "right", "width": 1.1}
+      ]
+    ],
+    "symbols2": [
+      [
+        {"key": "Esc", "action": "escape", "width": 1.1},
+        "~", "`", "|", "[", "]", "{", "}", "<", ">", "\\",
+        {"key": "⌫", "action": "backspace", "width": 1.5}
+      ],
+      [
+        {"key": "Tab", "action": "tab", "width": 1.5},
+        "€", "£", "¥", "¢", "₹", "§", "±", "×", "÷", "≠",
+        {"key": "⏎", "action": "enter", "width": 2.1}
+      ],
+      [
+        {"key": "123", "action": "symbols", "width": 2.0},
+        "°", "•", "©", "®", "™", "«", "»", "¿",
+        {"key": "Home", "action": "home", "width": 1.0},
+        {"key": "▲", "action": "up", "width": 1.1},
+        {"key": "End", "action": "end", "width": 1.0}
+      ],
+      [
+        {"key": "abc", "action": "lower", "width": 1.25},
+        {"key": "Ctrl", "action": "ctrl", "width": 1.1},
+        {"key": "⊞", "action": "win", "width": 1.1},
+        {"key": "Alt", "action": "alt", "width": 1.1},
+        {"key": ",", "width": 1.0},
+        {"key": "Space", "action": "space", "width": 7.2},
+        {"key": ".", "width": 1.0},
+        {"key": "◀", "action": "left", "width": 1.1},
+        {"key": "▼", "action": "down", "width": 1.1},
+        {"key": "▶", "action": "right", "width": 1.1}
+      ]
+    ]
+  }
+}

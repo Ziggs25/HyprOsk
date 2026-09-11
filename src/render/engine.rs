@@ -196,7 +196,12 @@ impl RenderEngine {
         latched_keys: &[(usize, usize)],
         swipe_offset: Option<f32>,
     ) {
-        let bg_u32 = theme.background.to_argb_u32();
+        let mut bg = theme.background;
+        if layout.blur.unwrap_or(false) {
+            let opacity = layout.opacity.unwrap_or(0.60);
+            bg.a = (opacity * 255.0).clamp(0.0, 255.0) as u8;
+        }
+        let bg_u32 = bg.to_argb_u32();
         let pixel_u32_slice: &mut [u32] = unsafe {
             std::slice::from_raw_parts_mut(pixels.as_mut_ptr() as *mut u32, (width * height) as usize)
         };
@@ -231,7 +236,7 @@ impl RenderEngine {
                     key.border_width.or(layout.border_width).unwrap_or(theme.border_width)
                 };
 
-                let key_bg = if is_active {
+                let mut key_bg = if is_active {
                     theme.key_pressed
                 } else if is_suggestion_bar {
                     if key.is_special {
@@ -241,12 +246,17 @@ impl RenderEngine {
                         Color::rgba(theme.key_background.r, theme.key_background.g, theme.key_background.b, 120)
                     }
                 } else if !borders_enabled && !key.is_special {
-                    theme.background
+                    bg
                 } else if key.is_special {
                     theme.key_special
                 } else {
                     theme.key_background
                 };
+
+                if layout.blur.unwrap_or(false) && !is_active && (!is_suggestion_bar || key.is_special) {
+                    let key_alpha = (layout.key_opacity.unwrap_or(0.50) * 255.0).clamp(0.0, 255.0) as u8;
+                    key_bg.a = key_alpha;
+                }
 
                 let text_col = if is_active {
                     Color::rgb(255, 255, 255)
