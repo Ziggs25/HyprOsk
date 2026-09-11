@@ -150,9 +150,30 @@ pub struct CustomLayoutFile {
     /// Optional key background opacity override (e.g. 0.50 for 50% opacity)
     #[serde(default)]
     pub key_opacity: Option<f32>,
+    /// Optional color palette overrides
+    #[serde(default)]
+    pub colors: Option<LayoutColors>,
     /// Layers map: "lower", "upper", "symbols", "symbols2"
     #[serde(default)]
     pub layers: HashMap<String, Vec<MatrixRow>>,
+}
+
+/// Optional color theme overrides defined in the layout JSON
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LayoutColors {
+    pub dock_bg: Option<String>,
+    pub key_bg: Option<String>,
+    pub key_bg_pressed: Option<String>,
+    pub clipboard_bg: Option<String>,
+    pub text_color: Option<String>,
+    pub text_color_pressed: Option<String>,
+    pub sub_color: Option<String>,
+    pub icon_color: Option<String>,
+    pub icon_color_pressed: Option<String>,
+    pub accent_color: Option<String>,
+    pub border_color: Option<String>,
+    pub suggest_bg: Option<String>,
+    pub suggest_bg_pressed: Option<String>,
 }
 
 fn default_layout_name() -> String {
@@ -342,6 +363,7 @@ impl CustomLayoutFile {
             blur: self.blur,
             opacity: self.opacity,
             key_opacity: self.key_opacity,
+            colors: self.colors.clone(),
         };
 
         // Always prepend the standard top action/suggestion bar

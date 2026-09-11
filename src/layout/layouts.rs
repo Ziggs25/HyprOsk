@@ -46,6 +46,8 @@ pub struct KeyboardLayout {
     pub opacity: Option<f32>,
     /// Optional key background opacity override (e.g. 0.50)
     pub key_opacity: Option<f32>,
+    /// Optional color palette overrides
+    pub colors: Option<crate::layout::custom::LayoutColors>,
 }
 
 impl KeyboardLayout {
@@ -128,6 +130,7 @@ impl KeyboardLayout {
             blur: None,
             opacity: None,
             key_opacity: None,
+            colors: None,
         }
     }
 

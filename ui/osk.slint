@@ -31,7 +31,12 @@ export global OskTheme {
     in-out property <color> key-bg: #1c1c1c;
     in-out property <color> key-bg-pressed: #141414;
     in-out property <color> text-color: #fff;
+    in-out property <color> text-color-pressed: #fff;
     in-out property <color> sub-color: #cdd6f4;
+    in-out property <color> icon-color: #fff;
+    in-out property <color> icon-color-pressed: #89b4fa;
+    in-out property <color> accent-color: #89b4fa;
+    in-out property <color> border-color: #585b70;
     in-out property <color> suggest-bg: rgba(255, 255, 255, 0.05);
     in-out property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
     in-out property <length> suggest-text-size: 21px;
@@ -180,7 +185,7 @@ component KeyVisual {
             x: 10px; y: 8px; width: parent.width - 20px; height: parent.height - 16px;
             text: k.label;
             font-size: 15px;
-            color: #fff;
+            color: k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
             wrap: word-wrap;
@@ -189,7 +194,7 @@ component KeyVisual {
             visible: k.is-pinned;
             x: parent.width - 18px; y: 8px; width: OskTheme.pin-size; height: OskTheme.pin-size;
             source: OskIcons.pin;
-            colorize: #89b4fa;
+            colorize: OskTheme.accent-color;
         }
     }
 
@@ -201,7 +206,7 @@ component KeyVisual {
         background: k.key-type == KeyType.suggestion
             ? (k.is-pressed ? OskTheme.suggest-bg-pressed : OskTheme.suggest-bg)
             : (k.icon == 34 ? #363a4f : (k.is-pressed ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent)));
-        border-color: k.icon == 34 ? #89b4fa : (k.is-pressed ? #585b70 : transparent);
+        border-color: k.icon == 34 ? OskTheme.accent-color : (k.is-pressed ? OskTheme.border-color : transparent);
         border-width: (k.icon == 34 || k.is-pressed) ? 1.5px : 0px;
         border-radius: k.key-type == KeyType.suggestion ? 8px : (k.key-type == KeyType.space ? OskTheme.space-radius : OskTheme.key-radius);
 
@@ -212,7 +217,7 @@ component KeyVisual {
             width: OskTheme.icon-size;
             height: OskTheme.icon-size;
             source: OskIcons.get(k.icon);
-            colorize: (k.icon == 34 || k.is-pressed) ? #89b4fa : #ffffff;
+            colorize: (k.icon == 34 || k.is-pressed) ? OskTheme.icon-color-pressed : OskTheme.icon-color;
             image-fit: contain;
         }
         Text {
@@ -222,7 +227,7 @@ component KeyVisual {
             font-family: "DejaVu Sans";
             font-size: k.is-functional ? OskTheme.functional-size : OskTheme.label-size;
             font-weight: 500;
-            color: OskTheme.text-color;
+            color: k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -233,7 +238,7 @@ component KeyVisual {
             font-family: "DejaVu Sans";
             font-size: OskTheme.suggest-text-size;
             font-weight: 500;
-            color: OskTheme.text-color;
+            color: k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
         }

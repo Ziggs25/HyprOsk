@@ -18,9 +18,20 @@ use slint::{LogicalSize, Model, ModelRc, PhysicalSize, VecModel, Window};
 use crate::layout::KeyboardLayout;
 use crate::layout::key::KeyAction;
 use crate::render::engine::RenderEngine;
+use crate::render::theme::Color as ThemeColor;
 use crate::wayland::state::HoldPreview;
 
 slint::include_modules!();
+
+fn parse_slint_color(hex_opt: Option<&String>, fallback: slint::Color) -> slint::Color {
+    match hex_opt {
+        Some(s) if !s.trim().is_empty() => {
+            let c = ThemeColor::parse_hex(s);
+            slint::Color::from_argb_u8(c.a, c.r, c.g, c.b)
+        }
+        _ => fallback,
+    }
+}
 
 /// Icon codes shared with `ui/osk.slint` `Key.icon`.
 pub mod icon {
@@ -317,41 +328,51 @@ impl SlintScene {
                 osk_theme.set_space_radius(20.0);
             }
 
+            let colors = layout.colors.as_ref();
             let blur_enabled = layout.blur.unwrap_or(false);
-            if blur_enabled {
+
+            let (default_dock_bg, default_clipboard_bg, default_key_bg, default_key_bg_pressed) = if blur_enabled {
                 let dock_alpha = (layout.opacity.unwrap_or(0.60) * 255.0).clamp(0.0, 255.0) as u8;
                 let key_alpha = (layout.key_opacity.unwrap_or(0.50) * 255.0).clamp(0.0, 255.0) as u8;
-
-                osk_theme.set_dock_bg(slint::Color::from_argb_u8(
-                    dock_alpha,
-                    theme.background.r,
-                    theme.background.g,
-                    theme.background.b,
-                ));
-                osk_theme.set_clipboard_bg(slint::Color::from_argb_u8(
-                    dock_alpha,
-                    (theme.background.r as f32 * 0.8) as u8,
-                    (theme.background.g as f32 * 0.8) as u8,
-                    (theme.background.b as f32 * 0.8) as u8,
-                ));
-                osk_theme.set_key_bg(slint::Color::from_argb_u8(
-                    key_alpha,
-                    theme.key_background.r,
-                    theme.key_background.g,
-                    theme.key_background.b,
-                ));
-                osk_theme.set_key_bg_pressed(slint::Color::from_argb_u8(
-                    170,
-                    theme.key_pressed.r,
-                    theme.key_pressed.g,
-                    theme.key_pressed.b,
-                ));
+                (
+                    slint::Color::from_argb_u8(dock_alpha, theme.background.r, theme.background.g, theme.background.b),
+                    slint::Color::from_argb_u8(
+                        dock_alpha,
+                        (theme.background.r as f32 * 0.8) as u8,
+                        (theme.background.g as f32 * 0.8) as u8,
+                        (theme.background.b as f32 * 0.8) as u8,
+                    ),
+                    slint::Color::from_argb_u8(key_alpha, theme.key_background.r, theme.key_background.g, theme.key_background.b),
+                    slint::Color::from_argb_u8(170, theme.key_pressed.r, theme.key_pressed.g, theme.key_pressed.b),
+                )
             } else {
-                osk_theme.set_dock_bg(slint::Color::from_argb_u8(255, 0, 0, 0));
-                osk_theme.set_clipboard_bg(slint::Color::from_argb_u8(255, 17, 17, 17));
-                osk_theme.set_key_bg(slint::Color::from_argb_u8(255, 28, 28, 28));
-                osk_theme.set_key_bg_pressed(slint::Color::from_argb_u8(255, 20, 20, 20));
-            }
+                (
+                    slint::Color::from_argb_u8(255, 0, 0, 0),
+                    slint::Color::from_argb_u8(255, 17, 17, 17),
+                    slint::Color::from_argb_u8(255, 28, 28, 28),
+                    slint::Color::from_argb_u8(255, 20, 20, 20),
+                )
+            };
+
+            osk_theme.set_dock_bg(parse_slint_color(colors.and_then(|c| c.dock_bg.as_ref()), default_dock_bg));
+            osk_theme.set_clipboard_bg(parse_slint_color(colors.and_then(|c| c.clipboard_bg.as_ref()), default_clipboard_bg));
+            osk_theme.set_key_bg(parse_slint_color(colors.and_then(|c| c.key_bg.as_ref()), default_key_bg));
+            osk_theme.set_key_bg_pressed(parse_slint_color(colors.and_then(|c| c.key_bg_pressed.as_ref()), default_key_bg_pressed));
+
+            let default_text_color = slint::Color::from_argb_u8(theme.text_color.a, theme.text_color.r, theme.text_color.g, theme.text_color.b);
+            let default_sub_color = slint::Color::from_argb_u8(255, 205, 214, 244); // Catppuccin Mocha text
+            let default_accent_color = slint::Color::from_argb_u8(theme.accent_color.a, theme.accent_color.r, theme.accent_color.g, theme.accent_color.b);
+            let default_border_color = slint::Color::from_argb_u8(theme.border_color.a, theme.border_color.r, theme.border_color.g, theme.border_color.b);
+
+            osk_theme.set_text_color(parse_slint_color(colors.and_then(|c| c.text_color.as_ref()), default_text_color));
+            osk_theme.set_text_color_pressed(parse_slint_color(colors.and_then(|c| c.text_color_pressed.as_ref()), default_text_color));
+            osk_theme.set_sub_color(parse_slint_color(colors.and_then(|c| c.sub_color.as_ref()), default_sub_color));
+            osk_theme.set_icon_color(parse_slint_color(colors.and_then(|c| c.icon_color.as_ref()), default_text_color));
+            osk_theme.set_icon_color_pressed(parse_slint_color(colors.and_then(|c| c.icon_color_pressed.as_ref()), default_accent_color));
+            osk_theme.set_accent_color(parse_slint_color(colors.and_then(|c| c.accent_color.as_ref()), default_accent_color));
+            osk_theme.set_border_color(parse_slint_color(colors.and_then(|c| c.border_color.as_ref()), default_border_color));
+            osk_theme.set_suggest_bg(parse_slint_color(colors.and_then(|c| c.suggest_bg.as_ref()), slint::Color::from_argb_u8(13, 255, 255, 255)));
+            osk_theme.set_suggest_bg_pressed(parse_slint_color(colors.and_then(|c| c.suggest_bg_pressed.as_ref()), slint::Color::from_argb_u8(46, 255, 255, 255)));
 
             let rects = RenderEngine::calculate_key_rects(layout, width, height, theme);
             let mut keys = Vec::new();

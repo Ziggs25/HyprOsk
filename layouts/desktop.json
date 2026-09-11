@@ -8,8 +8,15 @@
   "key_spacing": 5.0,
   "row_spacing": 5.0,
   "padding_x": 8.0,
-  "padding_y": 8.0,
   "borders": true,
+  "colors": {
+    "text_color": "#ffffff",
+    "text_color_pressed": "#ffffff",
+    "sub_color": "#cdd6f4",
+    "icon_color": "#ffffff",
+    "icon_color_pressed": "#89b4fa",
+    "accent_color": "#89b4fa"
+  },
   "layers": {
     "lower": [
       [

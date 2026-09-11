@@ -45,7 +45,7 @@ impl Default for GeneralConfig {
             margin_horizontal: 0,
             corner_radius: 0.0,
             exclusive_zone: true,
-            theme_name: "catppuccin".to_string(),
+            theme_name: "oled".to_string(),
             layout_mode: "desktop".to_string(),
             layout_file: None,
         }
@@ -71,14 +71,14 @@ pub struct ThemeConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            background: "#1e1e2ecc".to_string(),     // Catppuccin Mocha base with alpha
-            key_background: "#313244".to_string(), // Surface0
-            key_pressed: "#89b4fa".to_string(),    // Blue accent on press
-            key_special: "#45475a".to_string(),    // Surface1 for shift/enter/del
-            text_color: "#cdd6f4".to_string(),     // Text
-            text_special: "#f5e0dc".to_string(),   // Rosewater
-            accent_color: "#cba6f7".to_string(),   // Mauve
-            border_color: "#585b7066".to_string(), // Surface2
+            background: "#000000f5".to_string(),     // Deep solid black base
+            key_background: "#181818".to_string(), // Dark neutral key surface
+            key_pressed: "#0096ff".to_string(),    // Accent on press
+            key_special: "#262626".to_string(),    // Subtle dark for functional keys
+            text_color: "#f0f0f0".to_string(),     // Crisp light legend text
+            text_special: "#ffd700".to_string(),   // Gold/warm accent for special text
+            accent_color: "#00c8ff".to_string(),   // Bright accent
+            border_color: "#3c3c3c78".to_string(), // Muted border
             border_width: 1.0,
             key_radius: 8.0,
             key_spacing: 6.0,
