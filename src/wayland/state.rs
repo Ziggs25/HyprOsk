@@ -20,6 +20,7 @@ use smithay_client_toolkit::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::AsFd;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::atomic::Ordering;
@@ -129,6 +130,21 @@ pub struct WaylandState {
 
     // One-shot modifiers for Hyprland Super / Ctrl / Alt (Maliit-style latch)
     pub pending_mods: u32,
+    /// Physically-held modifiers (finger still down): applied to every
+    /// emission while held, never auto-consumed. Released when the owning
+    /// finger lifts (or via release_all_held_mods on cancel/hide/layer-switch).
+    pub held_mods: u32,
+    /// Held-modifier bits that have chorded at least one other key press.
+    /// A held bit released with this set is a pure release (no tap-latch).
+    pub held_mod_chorded: u32,
+    /// When each held-modifier bit was first pressed (for tap conversion).
+    pub held_mod_down_at: HashMap<u32, Instant>,
+    /// Touch/pointer owners per held-modifier bit (touch id, or POINTER_TOUCH_ID).
+    pub mod_owners: HashMap<u32, Vec<i32>>,
+    /// True when the current Shift hold raised Lower->Upper itself.
+    pub shift_hold_raised_layer: bool,
+    /// True when the current Shift press qualifies as a caps double-tap.
+    pub shift_tap_double: bool,
     // Spacebar Glide / Swipe Cursor Navigation
     pub space_touch_start: Option<(f64, f64)>,
     pub space_last_x: f64,
@@ -139,6 +155,13 @@ pub struct WaylandState {
     // clipboard grid and `layout` is built from `clipboard_history`.
     pub clipboard_mode: bool,
     pub clipboard_history: VecDeque<String>,
+    /// Vertical scroll offset (px) of the clipboard card grid. The top bar
+    /// and pinned bottom row stay fixed; only card rows slide.
+    pub clipboard_scroll_y: f32,
+    /// Active clipboard swipe: (start_x, start_y, scroll_at_start).
+    pub clipboard_drag_start: Option<(f64, f64, f32)>,
+    /// True once the drag exceeds the tap threshold (paste is suppressed).
+    pub clipboard_dragging: bool,
 
     // Hold-to-type secondary (sub) characters: press time for the current key.
     pub press_instant: Option<Instant>,
@@ -220,6 +243,12 @@ impl WaylandState {
             last_touch_at: None,
             last_workspace_switch_at: None,
             pending_mods: 0,
+            held_mods: 0,
+            held_mod_chorded: 0,
+            held_mod_down_at: HashMap::new(),
+            mod_owners: HashMap::new(),
+            shift_hold_raised_layer: false,
+            shift_tap_double: false,
             canvas_buffers: Vec::new(),
             canvas_size: (0, 0),
             im_state: InputMethodState::default(),
@@ -243,7 +272,10 @@ impl WaylandState {
             is_space_swiping: false,
             swipe_offset: None,
             clipboard_mode: false,
-            clipboard_history: VecDeque::new(),
+            clipboard_history: Self::load_clipboard_history(),
+            clipboard_scroll_y: 0.0,
+            clipboard_drag_start: None,
+            clipboard_dragging: false,
             press_instant: None,
             hold_preview: None,
             repeat_key: None,
@@ -303,6 +335,7 @@ impl WaylandState {
             surface.commit();
         }
         self.clipboard_mode = false;
+        self.release_all_held_mods();
         self.suggest_engine.dictionary.flush_user_dict();
     }
 
@@ -571,11 +604,232 @@ impl WaylandState {
     const MOD_CTRL: u32 = 4;
     const MOD_ALT: u32 = 8;
     const MOD_SUPER: u32 = 64;
+    /// Owner id used for pointer-driven modifier holds (touch ids are >= 0 in practice).
+    const POINTER_TOUCH_ID: i32 = i32::MIN;
+    /// Max hold duration that still converts to a one-shot tap on release.
+    const MOD_TAP_MAX_MS: u128 = 1000;
 
     fn sync_mods(&self) {
         if let Some(ref vk) = self.virtual_keyboard {
-            vk.modifiers(self.pending_mods, 0, 0, 0);
+            vk.modifiers(self.pending_mods | self.held_mods, 0, 0, 0);
         }
+    }
+
+    fn vk_time_now() -> u32 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u32)
+    }
+
+    fn vk_mod_keycode(mask: u32) -> Option<u32> {
+        match mask {
+            Self::MOD_SHIFT => Some(KEY_LEFTSHIFT),
+            Self::MOD_CTRL => Some(KEY_LEFTCTRL),
+            Self::MOD_ALT => Some(KEY_LEFTALT),
+            Self::MOD_SUPER => Some(KEY_LEFTMETA),
+            _ => None,
+        }
+    }
+
+    fn mod_mask_for_action(action: &KeyAction) -> u32 {
+        match action {
+            KeyAction::Shift => Self::MOD_SHIFT,
+            KeyAction::Ctrl => Self::MOD_CTRL,
+            KeyAction::Alt => Self::MOD_ALT,
+            KeyAction::Win => Self::MOD_SUPER,
+            _ => 0,
+        }
+    }
+
+    /// Emit a physical press for a held modifier (no-op without a bound vk).
+    fn vk_press_mod(&self, mask: u32) {
+        if let (Some(vk), Some(keycode)) = (&self.virtual_keyboard, Self::vk_mod_keycode(mask)) {
+            vk.key(Self::vk_time_now(), keycode, wl_keyboard::KeyState::Pressed.into());
+        }
+    }
+
+    /// Emit a physical release for a held modifier (no-op without a bound vk).
+    fn vk_release_mod(&self, mask: u32) {
+        if let (Some(vk), Some(keycode)) = (&self.virtual_keyboard, Self::vk_mod_keycode(mask)) {
+            vk.key(Self::vk_time_now(), keycode, wl_keyboard::KeyState::Released.into());
+        }
+    }
+
+    /// Modifier bits currently owned by the given touch/pointer id.
+    fn mods_owned_by(&self, owner: i32) -> Vec<u32> {
+        self.mod_owners
+            .iter()
+            .filter_map(|(mask, owners)| owners.contains(&owner).then_some(*mask))
+            .collect()
+    }
+
+    /// Register a modifier press: track as physically held, press the
+    /// hardware keycode immediately, and sync compositor modifier state.
+    fn mod_down(&mut self, mask: u32, owner: i32, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
+        let owners = self.mod_owners.entry(mask).or_default();
+        let first_owner = owners.is_empty();
+        if !owners.contains(&owner) {
+            owners.push(owner);
+        }
+        self.held_mod_down_at.entry(mask).or_insert(now);
+        self.held_mods |= mask;
+        if first_owner {
+            self.vk_press_mod(mask);
+        }
+        self.sync_mods();
+        tracing::info!("mod down {:b} held now {:b}", mask, self.held_mods);
+        self.redraw(qh);
+    }
+
+    /// Release a held modifier. A hold that chorded other keys is a pure
+    /// release; a quick chordless hold converts to a one-shot tap latch
+    /// (Shift keeps its double-tap CapsLock behavior).
+    fn mod_up(&mut self, mask: u32, owner: i32, qh: &QueueHandle<Self>) {
+        if let Some(owners) = self.mod_owners.get_mut(&mask) {
+            owners.retain(|&o| o != owner);
+        }
+        let still_owned = self.mod_owners.get(&mask).is_some_and(|o| !o.is_empty());
+        if still_owned {
+            // Another finger still holds this modifier.
+            self.sync_mods();
+            self.redraw(qh);
+            return;
+        }
+        self.mod_owners.remove(&mask);
+        if mask == Self::MOD_SHIFT {
+            self.shift_up(qh);
+            return;
+        }
+        let chorded = self.held_mod_chorded & mask != 0;
+        let quick = self
+            .held_mod_down_at
+            .get(&mask)
+            .is_some_and(|t| t.elapsed().as_millis() <= Self::MOD_TAP_MAX_MS);
+        self.held_mods &= !mask;
+        self.held_mod_down_at.remove(&mask);
+        self.held_mod_chorded &= !mask;
+        self.vk_release_mod(mask);
+        if !chorded && quick {
+            // Plain tap: classic sticky one-shot latch (toggles).
+            self.toggle_mod(mask, qh);
+        } else {
+            self.sync_mods();
+            self.redraw(qh);
+        }
+    }
+
+    /// Shift-specific release: chorded holds revert a self-raised Upper
+    /// layer, quick taps keep the classic toggle / double-tap CapsLock.
+    fn shift_up(&mut self, qh: &QueueHandle<Self>) {
+        let chorded = self.held_mod_chorded & Self::MOD_SHIFT != 0;
+        let quick = self
+            .held_mod_down_at
+            .get(&Self::MOD_SHIFT)
+            .is_some_and(|t| t.elapsed().as_millis() <= Self::MOD_TAP_MAX_MS);
+        let raised = self.shift_hold_raised_layer;
+        self.held_mods &= !Self::MOD_SHIFT;
+        self.held_mod_down_at.remove(&Self::MOD_SHIFT);
+        self.held_mod_chorded &= !Self::MOD_SHIFT;
+        self.shift_hold_raised_layer = false;
+        let double = self.shift_tap_double;
+        self.shift_tap_double = false;
+        self.vk_release_mod(Self::MOD_SHIFT);
+        if chorded {
+            // Held Shift + tapped keys: revert a self-raised layer, no latch.
+            if raised && !self.caps_lock {
+                self.current_layer = LayerId::Lower;
+                self.pending_mods &= !Self::MOD_SHIFT;
+            }
+            self.sync_mods();
+            self.sync_layout_and_redraw(qh);
+        } else if !quick {
+            // Slow hold without chords: silent release, revert self-raised layer.
+            if raised && !self.caps_lock {
+                self.current_layer = LayerId::Lower;
+                self.pending_mods &= !Self::MOD_SHIFT;
+            }
+            self.sync_mods();
+            self.sync_layout_and_redraw(qh);
+        } else if self.caps_lock {
+            self.caps_lock = false;
+            self.current_layer = LayerId::Lower;
+            self.pending_mods &= !Self::MOD_SHIFT;
+            self.last_shift_press = None;
+            self.sync_mods();
+            tracing::info!("caps lock OFF");
+            self.sync_layout_and_redraw(qh);
+        } else if raised {
+            // Tap from Lower: DOWN already raised to Upper -> keep latched one-shot.
+            self.pending_mods |= Self::MOD_SHIFT;
+            self.sync_mods();
+            self.sync_layout_and_redraw(qh);
+        } else if double {
+            self.caps_lock = true;
+            self.current_layer = LayerId::Upper;
+            self.pending_mods |= Self::MOD_SHIFT;
+            self.last_shift_press = None;
+            self.sync_mods();
+            tracing::info!("caps lock ON via double tap");
+            self.sync_layout_and_redraw(qh);
+        } else {
+            // Tap while Upper was already latched: unlatch back to Lower.
+            self.current_layer = LayerId::Lower;
+            self.pending_mods &= !Self::MOD_SHIFT;
+            self.sync_mods();
+            self.sync_layout_and_redraw(qh);
+        }
+    }
+
+    /// Register a Shift press: hold-track it and raise Lower->Upper immediately
+    /// so chorded letters preview/emission see the Upper layer.
+    fn shift_down(&mut self, owner: i32, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
+        self.shift_tap_double = self
+            .last_shift_press
+            .is_some_and(|p| p.elapsed().as_millis() <= 350);
+        self.last_shift_press = Some(now);
+        let owners = self.mod_owners.entry(Self::MOD_SHIFT).or_default();
+        let first_owner = owners.is_empty();
+        if !owners.contains(&owner) {
+            owners.push(owner);
+        }
+        self.held_mod_down_at.entry(Self::MOD_SHIFT).or_insert(now);
+        self.held_mods |= Self::MOD_SHIFT;
+        if first_owner {
+            self.vk_press_mod(Self::MOD_SHIFT);
+        }
+        if !self.caps_lock && self.current_layer == LayerId::Lower {
+            self.current_layer = LayerId::Upper;
+            self.pending_mods |= Self::MOD_SHIFT;
+            self.shift_hold_raised_layer = true;
+        } else {
+            self.shift_hold_raised_layer = false;
+        }
+        self.sync_mods();
+        tracing::info!("shift down held now {:b}", self.held_mods);
+        self.sync_layout_and_redraw(qh);
+    }
+
+    /// Physically release every held modifier and reset compositor modifier
+    /// state to pending-only. Prevents stuck keys on cancel/hide/layer-switch.
+    fn release_all_held_mods(&mut self) {
+        if self.held_mods == 0 {
+            return;
+        }
+        for mask in [Self::MOD_SHIFT, Self::MOD_CTRL, Self::MOD_ALT, Self::MOD_SUPER] {
+            if self.held_mods & mask != 0 {
+                self.vk_release_mod(mask);
+            }
+        }
+        self.held_mods = 0;
+        self.held_mod_chorded = 0;
+        self.held_mod_down_at.clear();
+        self.mod_owners.clear();
+        self.shift_hold_raised_layer = false;
+        self.shift_tap_double = false;
+        self.sync_mods();
+        tracing::info!("released all held modifiers");
     }
 
     fn toggle_mod(&mut self, mask: u32, qh: &QueueHandle<Self>) {
@@ -591,7 +845,8 @@ impl WaylandState {
 
     fn latched_positions(&self) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
-        if self.pending_mods == 0 {
+        let latched = self.pending_mods | self.held_mods;
+        if latched == 0 {
             return out;
         }
         for (r_idx, row) in self.layout.rows.iter().enumerate() {
@@ -603,7 +858,7 @@ impl WaylandState {
                     KeyAction::Win => Self::MOD_SUPER,
                     _ => 0,
                 };
-                if mask != 0 && (self.pending_mods & mask) != 0 {
+                if mask != 0 && (latched & mask) != 0 {
                     out.push((r_idx, k_idx));
                 }
             }
@@ -632,15 +887,120 @@ impl WaylandState {
         if self.clipboard_mode {
             self.capture_clipboard();
         }
+        // Always reset swipe state when (re)opening the view.
+        self.clipboard_scroll_y = 0.0;
+        self.clipboard_drag_start = None;
+        self.clipboard_dragging = false;
         self.sync_layout_and_redraw(qh);
+    }
+
+    /// Maximum vertical scroll (px) for the clipboard card grid.
+    pub fn clipboard_max_scroll(&self) -> f32 {
+        if !self.clipboard_mode {
+            return 0.0;
+        }
+        RenderEngine::clipboard_scroll_metrics(
+            &self.layout,
+            self.width.max(100),
+            self.height.max(100),
+            &self.theme,
+        )
+        .map(|(_, _, _, max)| max)
+        .unwrap_or(0.0)
+    }
+
+    /// 0.0..=1.0 scroll progress for the floating scrollbar pill.
+    pub fn scrollbar_ratio(&self) -> f32 {
+        let max = self.clipboard_max_scroll();
+        if max <= 0.0 {
+            0.0
+        } else {
+            (self.clipboard_scroll_y / max).clamp(0.0, 1.0)
+        }
+    }
+
+
+
+    /// Resolve wl-paste executable path, checking PATH, Nix profiles, and Nix store.
+    pub fn find_wl_paste() -> Option<&'static str> {
+        static FOUND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+        *FOUND.get_or_init(|| {
+            let candidates = [
+                "wl-paste",
+                "/run/current-system/sw/bin/wl-paste",
+                "/etc/profiles/per-user/CheeseGuru/bin/wl-paste",
+                "/nix/var/nix/profiles/default/bin/wl-paste",
+                "/nix/store/5biz40pc9n1r463bqnky55vjp42bxg76-wl-clipboard-2.3.0/bin/wl-paste",
+            ];
+            for bin in candidates {
+                if let Ok(out) = Command::new(bin).arg("--version").output() {
+                    if out.status.success() {
+                        tracing::info!("Found working wl-paste at: {}", bin);
+                        return Some(bin);
+                    }
+                }
+            }
+            None
+        })
+    }
+
+    /// Fetch current clipboard text using wl-paste.
+    pub fn get_clipboard_text() -> Option<String> {
+        let bin = Self::find_wl_paste()?;
+        if let Ok(output) = Command::new(bin).arg("--no-newline").output() {
+            if output.status.success() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if !text.is_empty() {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Path to persistent clipboard history JSON file.
+    pub fn clipboard_cache_path() -> Option<PathBuf> {
+        let base = if let Ok(cache) = std::env::var("XDG_CACHE_HOME") {
+            PathBuf::from(cache).join("hyprosk")
+        } else if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".cache/hyprosk")
+        } else {
+            return None;
+        };
+        Some(base.join("clipboard_history.json"))
+    }
+
+    /// Load persistent clipboard history from disk.
+    pub fn load_clipboard_history() -> VecDeque<String> {
+        if let Some(path) = Self::clipboard_cache_path() {
+            if path.exists() {
+                if let Ok(data) = std::fs::read_to_string(&path) {
+                    if let Ok(items) = serde_json::from_str::<Vec<String>>(&data) {
+                        return items.into();
+                    }
+                }
+            }
+        }
+        VecDeque::new()
+    }
+
+    /// Save persistent clipboard history to disk.
+    pub fn save_clipboard_history(&self) {
+        if let Some(path) = Self::clipboard_cache_path() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let items: Vec<String> = self.clipboard_history.iter().cloned().collect();
+            if let Ok(json) = serde_json::to_string_pretty(&items) {
+                let _ = std::fs::write(&path, json);
+            }
+        }
     }
 
     /// Record the current clipboard content into the (capped) history.
     pub fn capture_clipboard(&mut self) {
-        if let Ok(output) = Command::new("wl-paste").arg("--no-newline").output()
-            && let Ok(text) = String::from_utf8(output.stdout)
-            && !text.is_empty()
-        {
+        if let Some(text) = Self::get_clipboard_text() {
             self.push_clipboard(text);
         }
     }
@@ -653,22 +1013,56 @@ impl WaylandState {
         while self.clipboard_history.len() > 8 {
             self.clipboard_history.pop_back();
         }
+        self.save_clipboard_history();
     }
 
     pub fn switch_layer(&mut self, layer: LayerId, qh: &QueueHandle<Self>) {
+        self.release_all_held_mods();
         self.current_layer = layer;
         self.sync_layout_and_redraw(qh);
     }
 
     #[inline]
     pub fn update_key_rects(&mut self) {
-        self.key_rects = RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+        if self.clipboard_mode {
+            let max = RenderEngine::clipboard_scroll_metrics(
+                &self.layout,
+                self.width,
+                self.height,
+                &self.theme,
+            )
+            .map(|(_, _, _, m)| m)
+            .unwrap_or(0.0);
+            self.clipboard_scroll_y = self.clipboard_scroll_y.clamp(0.0, max.max(0.0));
+            self.key_rects = RenderEngine::calculate_key_rects_with_scroll(
+                &self.layout,
+                self.width,
+                self.height,
+                &self.theme,
+                self.clipboard_scroll_y,
+            );
+        } else {
+            self.key_rects =
+                RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+        }
     }
 
     pub fn sync_layout_and_redraw(&mut self, qh: &QueueHandle<Self>) {
         if self.clipboard_mode {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
-            self.layout = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
+            let mut lay = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
+            if let Some(ref custom) = self.custom_layout {
+                lay.colors = custom.colors.clone();
+                lay.key_spacing = custom.key_spacing;
+                lay.row_spacing = custom.row_spacing;
+                lay.padding_x = custom.padding_x;
+                lay.padding_y = custom.padding_y;
+                lay.borders = custom.borders;
+                lay.blur = custom.blur;
+                lay.opacity = custom.opacity;
+                lay.key_opacity = custom.key_opacity;
+            }
+            self.layout = lay;
         } else if let Some(ref custom) = self.custom_layout {
             self.layout = custom.to_keyboard_layout(
                 self.current_layer,
@@ -757,6 +1151,7 @@ impl WaylandState {
                     &latched_keys,
                     self.swipe_offset,
                     self.hold_preview.clone(),
+                    self.clipboard_scroll_y,
                     canvas,
                 ) {
                     slint_damage = Some(damage);
@@ -795,7 +1190,13 @@ impl WaylandState {
         }
     }
 
-    pub fn handle_key_press(&mut self, r_idx: usize, k_idx: usize, qh: &QueueHandle<Self>) {
+    pub fn handle_key_press(
+        &mut self,
+        r_idx: usize,
+        k_idx: usize,
+        qh: &QueueHandle<Self>,
+        touch_id: i32,
+    ) {
         let action = {
             let row = match self.layout.rows.get(r_idx) {
                 Some(r) => r,
@@ -816,17 +1217,31 @@ impl WaylandState {
         if !matches!(action, KeyAction::Shift) {
             self.last_shift_press = None;
         }
+        // Any non-modifier press while modifiers are held counts as a chord:
+        // held bits survive the emission instead of converting to a tap-latch.
+        let is_modifier = matches!(
+            action,
+            KeyAction::Shift | KeyAction::Ctrl | KeyAction::Alt | KeyAction::Win
+        );
+        if !is_modifier && self.held_mods != 0 {
+            self.held_mod_chorded |= self.held_mods;
+        }
 
         match action {
             KeyAction::Text(text) => {
-                let has_command_mods = (self.pending_mods & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                let has_command_mods = ((self.pending_mods | self.held_mods) & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
                 if !has_command_mods {
                     for ch in text.chars() {
                         self.suggest_engine.push_char(ch);
                     }
                 }
                 self.send_text(&text);
-                if !self.caps_lock && self.current_layer == LayerId::Upper {
+                // One-shot Shift reverts after a single letter, but a
+                // physically-held Shift keeps Upper across many presses.
+                if !self.caps_lock
+                    && self.current_layer == LayerId::Upper
+                    && (self.held_mods & Self::MOD_SHIFT) == 0
+                {
                     self.current_layer = LayerId::Lower;
                     self.pending_mods &= !Self::MOD_SHIFT;
                     self.sync_mods();
@@ -910,42 +1325,22 @@ impl WaylandState {
                 self.send_escape();
             }
             KeyAction::Shift => {
-                if self.caps_lock {
-                    self.caps_lock = false;
-                    self.current_layer = LayerId::Lower;
-                    self.pending_mods &= !Self::MOD_SHIFT;
-                    self.last_shift_press = None;
-                    self.sync_mods();
-                    tracing::info!("caps lock OFF");
-                } else if let Some(prev) = self.last_shift_press
-                    && prev.elapsed().as_millis() <= 350
-                {
-                    self.caps_lock = true;
-                    self.current_layer = LayerId::Upper;
-                    self.pending_mods |= Self::MOD_SHIFT;
-                    self.last_shift_press = None;
-                    self.sync_mods();
-                    tracing::info!("caps lock ON via double tap");
-                } else {
-                    self.last_shift_press = Some(Instant::now());
-                    let next = if self.current_layer == LayerId::Lower {
-                        LayerId::Upper
-                    } else {
-                        LayerId::Lower
-                    };
-                    self.current_layer = next;
-                    if next == LayerId::Upper {
-                        self.pending_mods |= Self::MOD_SHIFT;
-                    } else {
-                        self.pending_mods &= !Self::MOD_SHIFT;
-                    }
-                    self.sync_mods();
-                    tracing::info!("shift tap toggled, pending {:b}", self.pending_mods);
-                }
+                // Hold-tracked: layer raises now for chord feedback; the
+                // tap toggle / double-tap CapsLock resolves on release.
+                self.shift_down(touch_id, qh);
+                return;
             }
             KeyAction::SwitchLayer(layer) => {
+                // A layer switch rebuilds all geometry: drop held modifiers
+                // first so no physical key or latch can get stuck.
+                self.release_all_held_mods();
                 self.caps_lock = false;
                 self.current_layer = layer;
+                // Layer keys inside the clipboard view (e.g. the ABC bottom-row
+                // key) return to normal letter typing.
+                if self.clipboard_mode {
+                    self.clipboard_mode = false;
+                }
             }
             KeyAction::Hide => {
                 self.manually_shown = false;
@@ -980,10 +1375,7 @@ impl WaylandState {
             }
             KeyAction::Paste => {
                 tracing::info!("Paste requested");
-                if let Ok(output) = Command::new("wl-paste").arg("--no-newline").output()
-                    && let Ok(text) = String::from_utf8(output.stdout)
-                    && !text.is_empty()
-                {
+                if let Some(text) = Self::get_clipboard_text() {
                     self.send_text(&text);
                     self.push_clipboard(text);
                 }
@@ -997,15 +1389,16 @@ impl WaylandState {
                 }
             }
             KeyAction::Ctrl => {
-                self.toggle_mod(Self::MOD_CTRL, qh);
+                // Hold-tracked: tap converts to a one-shot latch on release.
+                self.mod_down(Self::MOD_CTRL, touch_id, qh);
                 return;
             }
             KeyAction::Alt => {
-                self.toggle_mod(Self::MOD_ALT, qh);
+                self.mod_down(Self::MOD_ALT, touch_id, qh);
                 return;
             }
             KeyAction::Win => {
-                self.toggle_mod(Self::MOD_SUPER, qh);
+                self.mod_down(Self::MOD_SUPER, touch_id, qh);
                 return;
             }
             KeyAction::Home => {
@@ -1097,6 +1490,14 @@ impl WaylandState {
     }
 
     pub fn update_hold_preview(&mut self, qh: &QueueHandle<Self>) {
+        // Secondary-key preview popup; disabled via `"preview_enabled": false`.
+        if self.layout.preview_enabled == Some(false) {
+            if self.hold_preview.is_some() {
+                self.hold_preview = None;
+                self.redraw(qh);
+            }
+            return;
+        }
         if let Some((r_idx, k_idx)) = self.pressed_key
             && let Some(row) = self.layout.rows.get(r_idx)
             && let Some(key) = row.keys.get(k_idx)
@@ -1107,21 +1508,27 @@ impl WaylandState {
             if self.hold_preview.is_none()
                 && let Some((rect, _)) = self.key_rects.get(r_idx).and_then(|r| r.get(k_idx))
             {
-                let popup_w = rect.w * 1.22;
-                    let popup_h = rect.h * 1.45;
-                    let mut popup_x = rect.x + rect.w / 2.0 - popup_w / 2.0;
-                    let mut popup_y = rect.y + rect.h / 2.0 - popup_h / 2.0 - 72.0;
-                    popup_y = popup_y.clamp(8.0, self.height as f32 - popup_h - 8.0);
-                    popup_x = popup_x.clamp(8.0, self.width as f32 - popup_w - 8.0);
-                    self.hold_preview = Some(HoldPreview {
-                        x: popup_x,
-                        y: popup_y,
-                        w: popup_w,
-                        h: popup_h,
-                        label: sec.clone(),
-                    });
-                    self.redraw(qh);
-                }
+                let popup_w = rect.w * 1.25;
+                // Taller preview bubble so it clears the user's finger completely.
+                // Overridable via the `"preview_height"` layout option.
+                let popup_h = self
+                    .layout
+                    .preview_height
+                    .unwrap_or((rect.h * 1.65).max(115.0));
+                let mut popup_x = rect.x + rect.w / 2.0 - popup_w / 2.0;
+                // Anchor popup bottom to float above the user's touch point with ample clearance
+                let mut popup_y = rect.y + 12.0 - popup_h;
+                popup_y = popup_y.clamp(2.0, self.height as f32 - popup_h - 4.0);
+                popup_x = popup_x.clamp(4.0, self.width as f32 - popup_w - 4.0);
+                self.hold_preview = Some(HoldPreview {
+                    x: popup_x,
+                    y: popup_y,
+                    w: popup_w,
+                    h: popup_h,
+                    label: sec.clone(),
+                });
+                self.redraw(qh);
+            }
             return;
         }
         if self.hold_preview.is_some() {
@@ -1130,7 +1537,22 @@ impl WaylandState {
         }
     }
 
-    pub fn handle_motion(&mut self, x: f64, _y: f64, qh: &QueueHandle<Self>) {
+    pub fn handle_motion(&mut self, x: f64, y: f64, qh: &QueueHandle<Self>) {
+        // Clipboard swipe scroll: vertical drag moves the card grid. Once the
+        // tap threshold is exceeded the pending tap is treated as a scroll.
+        if self.clipboard_mode && let Some((_, start_y, start_scroll)) = self.clipboard_drag_start {
+            let dy = (start_y - y) as f32;
+            if dy.abs() > 6.0 {
+                self.clipboard_dragging = true;
+            }
+            if self.clipboard_dragging {
+                let max = self.clipboard_max_scroll();
+                self.clipboard_scroll_y = (start_scroll + dy).clamp(0.0, max.max(0.0));
+                self.update_key_rects();
+                self.redraw(qh);
+                return;
+            }
+        }
         if let Some((start_x, _)) = self.space_touch_start {
             let delta = x - self.space_last_x;
             let step_threshold = 18.0;
@@ -1151,7 +1573,7 @@ impl WaylandState {
     }
 
     pub fn send_text(&mut self, text: &str) {
-        let has_mods = (self.pending_mods & !Self::MOD_SHIFT) != 0;
+        let has_mods = ((self.pending_mods | self.held_mods) & !Self::MOD_SHIFT) != 0;
         let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
         tracing::info!("send_text '{}' is_im={} has_mods={} surrounding={:?} cursor={}", text, is_im_active, has_mods, self.im_state.surrounding_text, self.im_state.cursor_pos);
         let use_im = is_im_active && !has_mods;
@@ -1228,7 +1650,18 @@ impl WaylandState {
 
         if let Some(ref vk) = self.virtual_keyboard {
             let pending = self.pending_mods;
-            let depressed = pending | if shift { Self::MOD_SHIFT } else { 0 };
+            let held = self.held_mods;
+            let shift_bit = if shift { Self::MOD_SHIFT } else { 0 };
+            let depressed = pending | held | shift_bit;
+            // Held modifiers are already physically down (pressed at mod-down
+            // time); only transient one-shot/shift bits need press/release here.
+            let transient = (pending | shift_bit) & !held;
+
+            // Any emission while modifiers are held counts as a chord: held
+            // bits survive instead of converting to a tap-latch on release.
+            if held != 0 {
+                self.held_mod_chorded |= held;
+            }
 
             if depressed != 0 {
                 vk.modifiers(depressed, 0, 0, 0);
@@ -1236,16 +1669,16 @@ impl WaylandState {
                 // Press down physical modifier keycodes so compositors (Hyprland) and client apps
                 // (GTK, Qt, Chromium, terminals) register actual shortcut combinations
                 // rather than inserting raw characters into input fields.
-                if depressed & Self::MOD_CTRL != 0 {
+                if transient & Self::MOD_CTRL != 0 {
                     vk.key(time, KEY_LEFTCTRL, wl_keyboard::KeyState::Pressed.into());
                 }
-                if depressed & Self::MOD_ALT != 0 {
+                if transient & Self::MOD_ALT != 0 {
                     vk.key(time, KEY_LEFTALT, wl_keyboard::KeyState::Pressed.into());
                 }
-                if depressed & Self::MOD_SUPER != 0 {
+                if transient & Self::MOD_SUPER != 0 {
                     vk.key(time, KEY_LEFTMETA, wl_keyboard::KeyState::Pressed.into());
                 }
-                if depressed & Self::MOD_SHIFT != 0 {
+                if transient & Self::MOD_SHIFT != 0 {
                     vk.key(time, KEY_LEFTSHIFT, wl_keyboard::KeyState::Pressed.into());
                 }
             }
@@ -1254,23 +1687,24 @@ impl WaylandState {
             vk.key(time, keycode, wl_keyboard::KeyState::Released.into());
 
             if depressed != 0 {
-                if depressed & Self::MOD_SHIFT != 0 {
+                if transient & Self::MOD_SHIFT != 0 {
                     vk.key(time, KEY_LEFTSHIFT, wl_keyboard::KeyState::Released.into());
                 }
-                if depressed & Self::MOD_SUPER != 0 {
+                if transient & Self::MOD_SUPER != 0 {
                     vk.key(time, KEY_LEFTMETA, wl_keyboard::KeyState::Released.into());
                 }
-                if depressed & Self::MOD_ALT != 0 {
+                if transient & Self::MOD_ALT != 0 {
                     vk.key(time, KEY_LEFTALT, wl_keyboard::KeyState::Released.into());
                 }
-                if depressed & Self::MOD_CTRL != 0 {
+                if transient & Self::MOD_CTRL != 0 {
                     vk.key(time, KEY_LEFTCTRL, wl_keyboard::KeyState::Released.into());
                 }
 
                 if pending != 0 {
                     self.pending_mods = 0;
                 }
-                vk.modifiers(0, 0, 0, 0);
+                // Restore held-modifier state (never drop to zero while held).
+                vk.modifiers(held, 0, 0, 0);
                 if pending != 0 {
                     tracing::info!("consumed one-shot mods {:b}", pending);
                 }
@@ -1378,7 +1812,23 @@ impl PointerHandler for WaylandState {
                 PointerEventKind::Press { .. } => {
                     self.note_input(false);
                     let (x, y) = event.position;
+                    if self.clipboard_mode {
+                        self.clipboard_drag_start = Some((x, y, self.clipboard_scroll_y));
+                        self.clipboard_dragging = false;
+                    }
                     if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &self.key_rects, x, y) {
+                        // Defer clipboard pastes to release so a vertical swipe
+                        // scrolls instead of pasting.
+                        if self.clipboard_mode
+                            && matches!(key.action, KeyAction::ClipboardItem(_))
+                        {
+                            self.pressed_key = Some((r_idx, k_idx));
+                            if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+                                self.pressed_keys.push((r_idx, k_idx));
+                            }
+                            self.redraw(qh);
+                            continue;
+                        }
                         if matches!(key.action, KeyAction::Space) {
                             self.space_touch_start = Some((x, y));
                             self.space_last_x = x;
@@ -1394,15 +1844,39 @@ impl PointerHandler for WaylandState {
                             self.pointer_pending_detail = Some((key.action.clone(), key.secondary_label.clone(), Instant::now()));
                             self.redraw(qh);
                         } else {
-                            self.handle_key_press(r_idx, k_idx, qh);
+                            self.handle_key_press(r_idx, k_idx, qh, Self::POINTER_TOUCH_ID);
                         }
                     }
                 }
                 PointerEventKind::Release { .. } => {
+                    let was_clipboard_drag = self.clipboard_dragging;
+                    self.clipboard_drag_start = None;
+                    self.clipboard_dragging = false;
+                    // Deferred clipboard tap: paste only when it was a tap,
+                    // not a scroll swipe.
+                    if self.clipboard_mode && let Some((r_idx, k_idx)) = self.pressed_key {
+                        let is_clip = self
+                            .layout
+                            .rows
+                            .get(r_idx)
+                            .and_then(|r| r.keys.get(k_idx))
+                            .map(|k| matches!(k.action, KeyAction::ClipboardItem(_)))
+                            .unwrap_or(false);
+                        if is_clip {
+                            self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+                            self.pressed_key = self.pressed_keys.last().copied();
+                            if !was_clipboard_drag {
+                                self.handle_key_press(r_idx, k_idx, qh, Self::POINTER_TOUCH_ID);
+                            } else {
+                                self.sync_layout_and_redraw(qh);
+                            }
+                            continue;
+                        }
+                    }
                     if let Some((action, secondary_label, down_time)) = self.pointer_pending_detail.take() {
                         let elapsed = down_time.elapsed();
                         let is_long_press = elapsed.as_millis() >= 300;
-                        let has_command_mods = (self.pending_mods & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                        let has_command_mods = ((self.pending_mods | self.held_mods) & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
                         if is_long_press && let Some(sec) = secondary_label {
                             if !has_command_mods {
                                 for ch in sec.chars() {
@@ -1418,7 +1892,10 @@ impl PointerHandler for WaylandState {
                             }
                             self.send_text(&primary);
                         }
-                        if !self.caps_lock && self.current_layer == LayerId::Upper {
+                        if !self.caps_lock
+                            && self.current_layer == LayerId::Upper
+                            && (self.held_mods & Self::MOD_SHIFT) == 0
+                        {
                             self.current_layer = LayerId::Lower;
                             self.pending_mods &= !Self::MOD_SHIFT;
                             self.sync_mods();
@@ -1432,6 +1909,32 @@ impl PointerHandler for WaylandState {
                         self.last_repeat_at = None;
                         self.sync_layout_and_redraw(qh);
                     } else if let Some((r_idx, k_idx)) = self.pressed_key {
+                        // Ownership-first: a pointer lifting off a held
+                        // modifier releases it via mod_up, never generically.
+                        let owned = self.mods_owned_by(Self::POINTER_TOUCH_ID);
+                        if !owned.is_empty() {
+                            self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+                            self.pressed_key = self.pressed_keys.last().copied();
+                            for mask in owned {
+                                self.mod_up(mask, Self::POINTER_TOUCH_ID, qh);
+                            }
+                            self.sync_layout_and_redraw(qh);
+                            continue;
+                        }
+                        let mask = self
+                            .layout
+                            .rows
+                            .get(r_idx)
+                            .and_then(|r| r.keys.get(k_idx))
+                            .map(|k| Self::mod_mask_for_action(&k.action))
+                            .unwrap_or(0);
+                        if mask != 0 {
+                            self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+                            self.pressed_key = self.pressed_keys.last().copied();
+                            self.mod_up(mask, Self::POINTER_TOUCH_ID, qh);
+                            self.sync_layout_and_redraw(qh);
+                            continue;
+                        }
                         self.handle_key_release(r_idx, k_idx, qh);
                     }
                 }
@@ -1456,8 +1959,23 @@ impl TouchHandler for WaylandState {
         self.note_input(true);
         let (x, y) = position;
         tracing::info!("touch down id={} pos=({:.0},{:.0}) active={}", _id, x, y, self.active_touches.len()+1);
+        if self.clipboard_mode {
+            self.clipboard_drag_start = Some((x, y, self.clipboard_scroll_y));
+            self.clipboard_dragging = false;
+        }
         if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &self.key_rects, x, y) {
             tracing::info!("  -> hit key {:?} at {}:{}", key.action, r_idx, k_idx);
+            // Defer clipboard pastes to release so a vertical swipe scrolls
+            // instead of pasting.
+            if self.clipboard_mode && matches!(key.action, KeyAction::ClipboardItem(_)) {
+                self.active_touches.insert(_id, (r_idx, k_idx));
+                if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+                    self.pressed_keys.push((r_idx, k_idx));
+                }
+                self.pressed_key = Some((r_idx, k_idx));
+                self.redraw(qh);
+                return;
+            }
             if matches!(key.action, KeyAction::Space) {
                 self.space_touch_start = Some((x, y));
                 self.space_last_x = x;
@@ -1475,7 +1993,7 @@ impl TouchHandler for WaylandState {
                 self.press_instant = Some(Instant::now());
                 self.redraw(qh);
             } else {
-                self.handle_key_press(r_idx, k_idx, qh);
+                self.handle_key_press(r_idx, k_idx, qh, _id);
             }
         } else {
             tracing::info!("  -> miss (no key)");
@@ -1501,7 +2019,7 @@ impl TouchHandler for WaylandState {
                 let elapsed = down_time.elapsed();
                 let is_long_press = elapsed.as_millis() >= 300;
 
-                let has_command_mods = (self.pending_mods & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                let has_command_mods = ((self.pending_mods | self.held_mods) & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
                 if is_long_press && let Some(sec) = secondary_label {
                     if !has_command_mods {
                         for ch in sec.chars() {
@@ -1518,7 +2036,10 @@ impl TouchHandler for WaylandState {
                     self.send_text(&primary);
                 }
 
-                if !self.caps_lock && self.current_layer == LayerId::Upper {
+                if !self.caps_lock
+                    && self.current_layer == LayerId::Upper
+                    && (self.held_mods & Self::MOD_SHIFT) == 0
+                {
                     self.current_layer = LayerId::Lower;
                     self.pending_mods &= !Self::MOD_SHIFT;
                     self.sync_mods();
@@ -1530,10 +2051,62 @@ impl TouchHandler for WaylandState {
             }
         }
         if let Some((r_idx, k_idx)) = self.active_touches.remove(&_id) {
+            // Ownership-first modifier release: a finger lifting off a key it
+            // holds as a modifier releases that modifier even if a layer
+            // switch rebuilt the layout under the finger since press-down.
+            let owned = self.mods_owned_by(_id);
+            if !owned.is_empty() {
+                self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+                self.pressed_key = self.pressed_keys.last().copied();
+                for mask in owned {
+                    self.mod_up(mask, _id, qh);
+                }
+                self.sync_layout_and_redraw(qh);
+                return;
+            }
+            let was_clipboard_drag = self.clipboard_dragging;
+            // Deferred clipboard tap: paste only on tap, not on scroll swipe.
+            let is_clip = self
+                .layout
+                .rows
+                .get(r_idx)
+                .and_then(|r| r.keys.get(k_idx))
+                .map(|k| matches!(k.action, KeyAction::ClipboardItem(_)))
+                .unwrap_or(false);
+            if self.clipboard_mode && is_clip {
+                self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+                self.pressed_key = self.pressed_keys.last().copied();
+                self.clipboard_drag_start = None;
+                self.clipboard_dragging = false;
+                if !was_clipboard_drag {
+                    self.handle_key_press(r_idx, k_idx, qh, _id);
+                } else {
+                    self.sync_layout_and_redraw(qh);
+                }
+                return;
+            }
             self.handle_key_release(r_idx, k_idx, qh);
         } else if let Some((r_idx, k_idx)) = self.pressed_key {
-            self.handle_key_release(r_idx, k_idx, qh);
+            // Fallback for releases without a matching touch-down: still
+            // route held modifiers through mod_up so they can't stick.
+            let mask = self
+                .layout
+                .rows
+                .get(r_idx)
+                .and_then(|r| r.keys.get(k_idx))
+                .map(|k| Self::mod_mask_for_action(&k.action))
+                .unwrap_or(0);
+            if mask != 0 {
+                self.pressed_keys.retain(|&p| p != (r_idx, k_idx));
+                self.pressed_key = self.pressed_keys.last().copied();
+                self.mod_up(mask, _id, qh);
+                self.sync_layout_and_redraw(qh);
+            } else {
+                self.handle_key_release(r_idx, k_idx, qh);
+            }
         }
+        self.clipboard_drag_start = None;
+        self.clipboard_dragging = false;
     }
 
     fn motion(
@@ -1550,6 +2123,8 @@ impl TouchHandler for WaylandState {
     }
 
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
+        // Release held modifiers first so no physical key or latch can stick.
+        self.release_all_held_mods();
         self.pressed_key = None;
         self.pressed_keys.clear();
         self.active_touches.clear();
@@ -1564,6 +2139,8 @@ impl TouchHandler for WaylandState {
         self.space_touch_start = None;
         self.is_space_swiping = false;
         self.swipe_offset = None;
+        self.clipboard_drag_start = None;
+        self.clipboard_dragging = false;
     }
 
     fn shape(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _major: f64, _minor: f64) {}

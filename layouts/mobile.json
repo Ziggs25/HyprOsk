@@ -2,6 +2,8 @@
   "name": "Mobile Layout",
   "mode": "mobile",
   "blur": true,
+  "opacity": 0.90,
+  "key_opacity": 0.90,
   "width": 392,
   "height": 350,
   "margin_bottom": 16,
@@ -10,6 +12,9 @@
   "padding_x": 5.0,
   "padding_y": 8.0,
   "borders": false,
+  "matugen": true,
+  "matugen_type": "scheme-vibrant",
+  "matugen_prefer": "saturation",
   "font_size": 2.0,
   "layers": {
     "lower": [
@@ -37,7 +42,7 @@
         {"key": "l", "sub": ")"}
       ],
       [
-        {"key": "⇧", "action": "shift", "width": 1.35},
+        {"key": "⇧", "action": "shift", "width": 1.35, "bg_color": "surface_container_high"},
         {"key": "z", "sub": "*"},
         {"key": "x", "sub": "\""},
         {"key": "c", "sub": "'"},
@@ -45,14 +50,14 @@
         {"key": "b", "sub": ";"},
         {"key": "n", "sub": "!"},
         {"key": "m", "sub": "?"},
-        {"key": "⌫", "action": "backspace", "width": 1.35}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
       ],
       [
-        {"key": "?123", "action": "symbols", "width": 1.35},
+        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "surface_container_high"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
       ]
     ],
     "upper": [
@@ -80,7 +85,7 @@
         {"key": "L", "sub": ")"}
       ],
       [
-        {"key": "⇧", "action": "shift", "width": 1.35},
+        {"key": "⇧", "action": "shift", "width": 1.35, "bg_color": "surface_container_high"},
         {"key": "Z", "sub": "*"},
         {"key": "X", "sub": "\""},
         {"key": "C", "sub": "'"},
@@ -88,14 +93,14 @@
         {"key": "B", "sub": ";"},
         {"key": "N", "sub": "!"},
         {"key": "M", "sub": "?"},
-        {"key": "⌫", "action": "backspace", "width": 1.35}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
       ],
       [
-        {"key": "?123", "action": "symbols", "width": 1.35},
+        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "surface_container_high"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
       ]
     ],
     "symbols": [
@@ -106,16 +111,16 @@
         "@", "#", "$", "%", "&", "-", "+", "(", ")", "/"
       ],
       [
-        {"key": "=\\<", "action": "symbols2", "width": 1.35},
+        {"key": "=\\<", "action": "symbols2", "width": 1.35, "bg_color": "surface_container_high"},
         "*", "\"", "'", ":", ";", "!", "?",
-        {"key": "⌫", "action": "backspace", "width": 1.35}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
       ],
       [
-        {"key": "ABC", "action": "lower", "width": 1.35},
+        {"key": "ABC", "action": "lower", "width": 1.35, "bg_color": "surface_container_high"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
       ]
     ],
     "symbols2": [
@@ -126,16 +131,16 @@
         "£", "¢", "€", "¥", "^", "°", "=", "{", "}", "\\"
       ],
       [
-        {"key": "?123", "action": "symbols", "width": 1.35},
+        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "surface_container_high"},
         "%", "_", ">", "<", "[", "]", "§",
-        {"key": "⌫", "action": "backspace", "width": 1.35}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
       ],
       [
-        {"key": "ABC", "action": "lower", "width": 1.35},
+        {"key": "ABC", "action": "lower", "width": 1.35, "bg_color": "surface_container_high"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
       ]
     ]
   }

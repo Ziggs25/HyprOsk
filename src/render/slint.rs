@@ -23,13 +23,31 @@ use crate::wayland::state::HoldPreview;
 
 slint::include_modules!();
 
-fn parse_slint_color(hex_opt: Option<&String>, fallback: slint::Color) -> slint::Color {
+fn parse_slint_color(hex_opt: Option<&String>, fallback: slint::Color, alpha_override: Option<u8>) -> slint::Color {
     match hex_opt {
         Some(s) if !s.trim().is_empty() => {
             let c = ThemeColor::parse_hex(s);
-            slint::Color::from_argb_u8(c.a, c.r, c.g, c.b)
+            let a = if let Some(ao) = alpha_override {
+                // If user didn't specify custom alpha in hex (e.g. #rrggbb), apply blur alpha
+                if c.a == 255 { ao } else { c.a }
+            } else {
+                c.a
+            };
+            slint::Color::from_argb_u8(a, c.r, c.g, c.b)
         }
         _ => fallback,
+    }
+}
+
+/// Parse an optional per-key `#rrggbb[aa]` color (already resolved from raw
+/// hex or an M3 token name at layout load). Returns `(has_custom, color)`.
+fn per_key_color(opt: &Option<String>) -> (bool, slint::Color) {
+    match opt {
+        Some(s) if !s.trim().is_empty() => {
+            let c = ThemeColor::parse_hex(s);
+            (true, slint::Color::from_argb_u8(c.a, c.r, c.g, c.b))
+        }
+        _ => (false, slint::Color::from_argb_u8(0, 0, 0, 0)),
     }
 }
 
@@ -151,6 +169,7 @@ struct CachedLayout {
     layout: KeyboardLayout,
     width: u32,
     height: u32,
+    clipboard_scroll_y: f32,
     key_coords: Vec<(usize, usize)>,
 }
 
@@ -246,7 +265,13 @@ impl SlintScene {
             KeyAction::ArrowUp => icon::ARROW_U,
             KeyAction::ArrowDown => icon::ARROW_D,
             KeyAction::Hide => icon::DISMISS,
-            KeyAction::Clipboard => icon::CLIPBOARD,
+            KeyAction::Clipboard => {
+                if label.contains("Back") {
+                    0
+                } else {
+                    icon::CLIPBOARD
+                }
+            }
             KeyAction::None if label == "🎤" => icon::MIC,
             KeyAction::None if label == "gear" => icon::GEAR,
             KeyAction::None if label == "palette" => icon::PALETTE,
@@ -282,6 +307,7 @@ impl SlintScene {
     /// regions updated during this frame, or `None` if the Slint rendering step
     /// failed so the caller can fall back to the legacy `RenderEngine`.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         layout: &KeyboardLayout,
@@ -292,11 +318,15 @@ impl SlintScene {
         latched_keys: &[(usize, usize)],
         _swipe_offset: Option<f32>,
         hold_preview: Option<HoldPreview>,
+        clipboard_scroll_y: f32,
         out_shm: &mut [u8],
     ) -> Option<Vec<(i32, i32, i32, i32)>> {
         let needs_rebuild = match &self.cached_layout {
             Some(cached) => {
-                cached.width != width || cached.height != height || &cached.layout != layout
+                cached.width != width
+                    || cached.height != height
+                    || &cached.layout != layout
+                    || (cached.clipboard_scroll_y - clipboard_scroll_y).abs() > 0.5
             }
             None => true,
         };
@@ -333,7 +363,7 @@ impl SlintScene {
 
             let (default_dock_bg, default_clipboard_bg, default_key_bg, default_key_bg_pressed) = if blur_enabled {
                 let dock_alpha = (layout.opacity.unwrap_or(0.60) * 255.0).clamp(0.0, 255.0) as u8;
-                let key_alpha = (layout.key_opacity.unwrap_or(0.50) * 255.0).clamp(0.0, 255.0) as u8;
+                let key_alpha = (layout.key_opacity.unwrap_or(0.90) * 255.0).clamp(0.0, 255.0) as u8;
                 (
                     slint::Color::from_argb_u8(dock_alpha, theme.background.r, theme.background.g, theme.background.b),
                     slint::Color::from_argb_u8(
@@ -354,27 +384,46 @@ impl SlintScene {
                 )
             };
 
-            osk_theme.set_dock_bg(parse_slint_color(colors.and_then(|c| c.dock_bg.as_ref()), default_dock_bg));
-            osk_theme.set_clipboard_bg(parse_slint_color(colors.and_then(|c| c.clipboard_bg.as_ref()), default_clipboard_bg));
-            osk_theme.set_key_bg(parse_slint_color(colors.and_then(|c| c.key_bg.as_ref()), default_key_bg));
-            osk_theme.set_key_bg_pressed(parse_slint_color(colors.and_then(|c| c.key_bg_pressed.as_ref()), default_key_bg_pressed));
+            let (dock_alpha_opt, key_alpha_opt) = if blur_enabled {
+                (
+                    Some((layout.opacity.unwrap_or(0.60) * 255.0).clamp(0.0, 255.0) as u8),
+                    Some((layout.key_opacity.unwrap_or(0.90) * 255.0).clamp(0.0, 255.0) as u8),
+                )
+            } else {
+                (None, None)
+            };
+
+            osk_theme.set_dock_bg(parse_slint_color(colors.and_then(|c| c.dock_bg.as_ref()), default_dock_bg, dock_alpha_opt));
+            osk_theme.set_clipboard_bg(parse_slint_color(colors.and_then(|c| c.clipboard_bg.as_ref()), default_clipboard_bg, dock_alpha_opt));
+            osk_theme.set_key_bg(parse_slint_color(colors.and_then(|c| c.key_bg.as_ref()), default_key_bg, key_alpha_opt));
+            osk_theme.set_key_bg_pressed(parse_slint_color(colors.and_then(|c| c.key_bg_pressed.as_ref()), default_key_bg_pressed, key_alpha_opt));
 
             let default_text_color = slint::Color::from_argb_u8(theme.text_color.a, theme.text_color.r, theme.text_color.g, theme.text_color.b);
             let default_sub_color = slint::Color::from_argb_u8(255, 205, 214, 244); // Catppuccin Mocha text
             let default_accent_color = slint::Color::from_argb_u8(theme.accent_color.a, theme.accent_color.r, theme.accent_color.g, theme.accent_color.b);
             let default_border_color = slint::Color::from_argb_u8(theme.border_color.a, theme.border_color.r, theme.border_color.g, theme.border_color.b);
 
-            osk_theme.set_text_color(parse_slint_color(colors.and_then(|c| c.text_color.as_ref()), default_text_color));
-            osk_theme.set_text_color_pressed(parse_slint_color(colors.and_then(|c| c.text_color_pressed.as_ref()), default_text_color));
-            osk_theme.set_sub_color(parse_slint_color(colors.and_then(|c| c.sub_color.as_ref()), default_sub_color));
-            osk_theme.set_icon_color(parse_slint_color(colors.and_then(|c| c.icon_color.as_ref()), default_text_color));
-            osk_theme.set_icon_color_pressed(parse_slint_color(colors.and_then(|c| c.icon_color_pressed.as_ref()), default_accent_color));
-            osk_theme.set_accent_color(parse_slint_color(colors.and_then(|c| c.accent_color.as_ref()), default_accent_color));
-            osk_theme.set_border_color(parse_slint_color(colors.and_then(|c| c.border_color.as_ref()), default_border_color));
-            osk_theme.set_suggest_bg(parse_slint_color(colors.and_then(|c| c.suggest_bg.as_ref()), slint::Color::from_argb_u8(13, 255, 255, 255)));
-            osk_theme.set_suggest_bg_pressed(parse_slint_color(colors.and_then(|c| c.suggest_bg_pressed.as_ref()), slint::Color::from_argb_u8(46, 255, 255, 255)));
+            osk_theme.set_text_color(parse_slint_color(colors.and_then(|c| c.text_color.as_ref()), default_text_color, None));
+            osk_theme.set_text_color_pressed(parse_slint_color(colors.and_then(|c| c.text_color_pressed.as_ref()), default_text_color, None));
+            osk_theme.set_sub_color(parse_slint_color(colors.and_then(|c| c.sub_color.as_ref()), default_sub_color, None));
+            osk_theme.set_icon_color(parse_slint_color(colors.and_then(|c| c.icon_color.as_ref()), default_text_color, None));
+            osk_theme.set_icon_color_pressed(parse_slint_color(colors.and_then(|c| c.icon_color_pressed.as_ref()), default_accent_color, None));
+            osk_theme.set_accent_color(parse_slint_color(colors.and_then(|c| c.accent_color.as_ref()), default_accent_color, None));
+            osk_theme.set_border_color(parse_slint_color(colors.and_then(|c| c.border_color.as_ref()), default_border_color, None));
+            osk_theme.set_suggest_bg(parse_slint_color(colors.and_then(|c| c.suggest_bg.as_ref()), slint::Color::from_argb_u8(13, 255, 255, 255), None));
+            osk_theme.set_suggest_bg_pressed(parse_slint_color(colors.and_then(|c| c.suggest_bg_pressed.as_ref()), slint::Color::from_argb_u8(46, 255, 255, 255), None));
+            osk_theme.set_preview_bg(parse_slint_color(colors.and_then(|c| c.preview_bg_color.as_ref()), slint::Color::from_argb_u8(255, 45, 45, 45), None));
+            osk_theme.set_preview_text(parse_slint_color(colors.and_then(|c| c.preview_text_color.as_ref()), slint::Color::from_argb_u8(255, 255, 255, 255), None));
+            osk_theme.set_preview_border(parse_slint_color(colors.and_then(|c| c.preview_border_color.as_ref()), slint::Color::from_argb_u8(255, 68, 68, 68), None));
+            osk_theme.set_preview_font_size(layout.preview_font_size.unwrap_or(34.0));
 
-            let rects = RenderEngine::calculate_key_rects(layout, width, height, theme);
+            let rects = RenderEngine::calculate_key_rects_with_scroll(
+                layout,
+                width,
+                height,
+                theme,
+                clipboard_scroll_y,
+            );
             let mut keys = Vec::new();
             let mut key_coords = Vec::new();
 
@@ -412,6 +461,17 @@ impl SlintScene {
 
                     let has_border = key.borders.or(layout.borders).unwrap_or(true);
 
+                    let (has_custom_bg, bg_color) = per_key_color(&key.bg_color);
+                    let (has_custom_bg_pressed, bg_color_pressed) =
+                        per_key_color(&key.bg_color_pressed);
+                    let (has_custom_text, text_color) = per_key_color(&key.text_color);
+                    let (has_custom_text_pressed, text_color_pressed) =
+                        per_key_color(&key.text_color_pressed);
+                    let (has_custom_icon, icon_color) = per_key_color(&key.icon_color);
+                    let (has_custom_icon_pressed, icon_color_pressed) =
+                        per_key_color(&key.icon_color_pressed);
+                    let (has_custom_border, border_color) = per_key_color(&key.border_color);
+
                     keys.push(Key {
                         x: rect.x,
                         y: rect.y,
@@ -425,6 +485,20 @@ impl SlintScene {
                         is_functional: key.is_special,
                         is_pinned: key.is_pinned,
                         has_border,
+                        has_custom_bg,
+                        bg_color,
+                        has_custom_bg_pressed,
+                        bg_color_pressed,
+                        has_custom_text,
+                        text_color,
+                        has_custom_text_pressed,
+                        text_color_pressed,
+                        has_custom_icon,
+                        icon_color,
+                        has_custom_icon_pressed,
+                        icon_color_pressed,
+                        has_custom_border,
+                        border_color,
                     });
                     key_coords.push((r_idx, k_idx));
                 }
@@ -438,12 +512,30 @@ impl SlintScene {
             });
             self.ui.set_show_clipboard(show_clipboard);
 
+            // Floating scrollbar state for the clipboard view (LEFT pill in
+            // `ui/osk.slint`). Visible only when the card grid overflows.
+            let (has_scroll, ratio) = if show_clipboard {
+                let max = RenderEngine::clipboard_scroll_metrics(layout, width, height, theme)
+                    .map(|(_, _, _, m)| m)
+                    .unwrap_or(0.0);
+                if max > 0.5 {
+                    (true, (clipboard_scroll_y / max).clamp(0.0, 1.0))
+                } else {
+                    (false, 0.0)
+                }
+            } else {
+                (false, 0.0)
+            };
+            self.ui.set_clipboard_scrollbar_visible(has_scroll);
+            self.ui.set_clipboard_scroll_ratio(ratio);
+
             self.current_keys = keys.clone();
             self.key_model.set_vec(keys);
             self.cached_layout = Some(CachedLayout {
                 layout: layout.clone(),
                 width,
                 height,
+                clipboard_scroll_y,
                 key_coords,
             });
         } else {

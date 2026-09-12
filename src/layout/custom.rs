@@ -63,6 +63,27 @@ pub struct KeyObject {
     /// Optional explicit width for this key in pixels (overrides relative width weight)
     #[serde(default)]
     pub width_px: Option<f32>,
+    /// Per-key background color: raw `#rrggbb` or M3 token name (e.g. "primary")
+    #[serde(default)]
+    pub bg_color: Option<String>,
+    /// Per-key pressed background color
+    #[serde(default)]
+    pub bg_color_pressed: Option<String>,
+    /// Per-key label text color
+    #[serde(default)]
+    pub text_color: Option<String>,
+    /// Per-key pressed label text color
+    #[serde(default)]
+    pub text_color_pressed: Option<String>,
+    /// Per-key icon color
+    #[serde(default)]
+    pub icon_color: Option<String>,
+    /// Per-key pressed icon color
+    #[serde(default)]
+    pub icon_color_pressed: Option<String>,
+    /// Per-key border color
+    #[serde(default)]
+    pub border_color: Option<String>,
 }
 
 fn default_key_weight() -> f32 {
@@ -150,6 +171,33 @@ pub struct CustomLayoutFile {
     /// Optional key background opacity override (e.g. 0.50 for 50% opacity)
     #[serde(default)]
     pub key_opacity: Option<f32>,
+    /// Whether the hold-to-preview popup for secondary labels is shown.
+    /// Set to false to disable; default (absent) means enabled.
+    #[serde(default)]
+    pub preview_enabled: Option<bool>,
+    /// Explicit hold-preview popup height in pixels.
+    /// If omitted, defaults to 1.65x key height (min 115px).
+    #[serde(default)]
+    pub preview_height: Option<f32>,
+    /// Hold-preview popup label font size in pixels (default 34).
+    #[serde(default)]
+    pub preview_font_size: Option<f32>,
+    /// Whether to generate dynamic Material 3 (M3) colors using matugen
+    #[serde(default)]
+    pub matugen: Option<bool>,
+    /// Optional path to a matugen-generated colors.json file (e.g. "~/.config/hyprosk/colors.json")
+    #[serde(default)]
+    pub matugen_file: Option<String>,
+    /// Matugen scheme type, e.g. "scheme-vibrant" (Android 16 default)
+    #[serde(default)]
+    pub matugen_type: Option<String>,
+    /// Matugen source-color preference, e.g. "saturation"
+    #[serde(default)]
+    pub matugen_prefer: Option<String>,
+    /// Raw M3 token -> hex map from matugen (e.g. "primary" -> "#ffb2bc").
+    /// Populated when matugen colors are resolved; never serialized.
+    #[serde(skip)]
+    pub m3_map: HashMap<String, String>,
     /// Optional color palette overrides
     #[serde(default)]
     pub colors: Option<LayoutColors>,
@@ -174,6 +222,9 @@ pub struct LayoutColors {
     pub border_color: Option<String>,
     pub suggest_bg: Option<String>,
     pub suggest_bg_pressed: Option<String>,
+    pub preview_bg_color: Option<String>,
+    pub preview_text_color: Option<String>,
+    pub preview_border_color: Option<String>,
 }
 
 fn default_layout_name() -> String {
@@ -188,6 +239,251 @@ pub const DEFAULT_DESKTOP_LAYOUT: &str = include_str!("../../layouts/desktop.jso
 pub const DEFAULT_MOBILE_LAYOUT: &str = include_str!("../../layouts/mobile.json");
 
 impl CustomLayoutFile {
+    /// Detect wallpaper path and invoke matugen to extract Material 3 colors
+    /// Parse Material 3 colors from a JSON string outputted by matugen
+    pub fn parse_m3_from_json(json_str: &str) -> Option<LayoutColors> {
+        let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+        let colors = parsed.get("colors")?;
+
+        let get_color = |name: &str| -> Option<String> {
+            colors.get(name)?.get("dark")?.get("color")?.as_str().map(|s| s.to_string())
+        };
+
+        let surface = get_color("surface");
+        let surface_container = get_color("surface_container").or_else(|| get_color("surface_container_low"));
+        let surface_container_high =
+            get_color("surface_container_high").or_else(|| get_color("surface_container"));
+        let on_surface = get_color("on_surface");
+        let on_surface_variant = get_color("on_surface_variant");
+        let primary = get_color("primary");
+        let outline = get_color("outline");
+
+        Some(LayoutColors {
+            dock_bg: surface.clone(),
+            key_bg: surface_container,
+            key_bg_pressed: surface_container_high,
+            clipboard_bg: get_color("surface_container_lowest").or(surface),
+            text_color: on_surface.clone(),
+            text_color_pressed: on_surface,
+            sub_color: on_surface_variant,
+            icon_color: get_color("secondary").or_else(|| primary.clone()),
+            icon_color_pressed: primary.clone(),
+            accent_color: primary,
+            border_color: outline,
+            suggest_bg: Some("rgba(255, 255, 255, 0.05)".to_string()),
+            suggest_bg_pressed: Some("rgba(255, 255, 255, 0.18)".to_string()),
+            preview_bg_color: get_color("surface_container_highest")
+                .or_else(|| get_color("surface_container_high")),
+            preview_text_color: get_color("on_surface"),
+            preview_border_color: get_color("outline_variant").or_else(|| get_color("outline")),
+        })
+    }
+
+    /// Extract the raw M3 token -> hex map from matugen JSON output.
+    /// Each token's dark-mode color is stored (e.g. "primary" -> "#ffb2bc",
+    /// "surface_container_highest" -> "#3d2c2e").
+    pub fn parse_m3_map_from_json(json_str: &str) -> Option<HashMap<String, String>> {
+        let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+        let colors = parsed.get("colors")?.as_object()?;
+        let mut map = HashMap::new();
+        for (token, val) in colors {
+            if let Some(hex) = val.get("dark")?.get("color")?.as_str() {
+                map.insert(token.clone(), hex.to_string());
+            }
+        }
+        if map.is_empty() { None } else { Some(map) }
+    }
+
+    /// Resolve a per-key color value to a `#rrggbb[aa]` hex string.
+    /// Raw `#...` values pass through; otherwise the value is looked up as
+    /// an M3 token name in `m3_map` (case-insensitive fallback); a bare
+    /// 6/8-digit hex value is normalized with a `#` prefix.
+    /// Returns `None` when the value is missing or unresolvable.
+    pub fn resolve_color(
+        val_opt: Option<&str>,
+        m3_map: Option<&HashMap<String, String>>,
+    ) -> Option<String> {
+        let val = val_opt?.trim();
+        if val.is_empty() {
+            return None;
+        }
+        if val.starts_with('#') {
+            return Some(val.to_string());
+        }
+        if let Some(map) = m3_map
+            && let Some(hex) = map.get(val).or_else(|| map.get(&val.to_lowercase()))
+        {
+            return Some(hex.clone());
+        }
+        let is_hex = (val.len() == 6 || val.len() == 8)
+            && val.chars().all(|c| c.is_ascii_hexdigit());
+        if is_hex {
+            Some(format!("#{val}"))
+        } else {
+            None
+        }
+    }
+
+    /// Load Material 3 colors either from a specified matugen_file, standard colors.json locations, or generate via matugen
+    pub fn resolve_matugen_colors(
+        custom_file: Option<&str>,
+        prefer: Option<&str>,
+        scheme_type: Option<&str>,
+    ) -> Option<(LayoutColors, HashMap<String, String>)> {
+        // 1. If an explicit matugen JSON file is specified or exists in common locations:
+        let mut candidates = Vec::new();
+        if let Some(explicit) = custom_file {
+            let expanded = if explicit.starts_with("~/") {
+                if let Ok(home) = std::env::var("HOME") {
+                    PathBuf::from(home).join(&explicit[2..])
+                } else {
+                    PathBuf::from(explicit)
+                }
+            } else {
+                PathBuf::from(explicit)
+            };
+            candidates.push(expanded);
+        }
+
+        if let Ok(home) = std::env::var("HOME") {
+            let h = PathBuf::from(&home);
+            candidates.push(h.join(".config/hyprosk/colors.json"));
+            candidates.push(h.join(".cache/matugen/colors.json"));
+            candidates.push(h.join(".config/quickshell/colors.json"));
+        }
+
+        for path in candidates {
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(colors) = Self::parse_m3_from_json(&content) {
+                        tracing::info!("Loaded Material 3 palette directly from {:?}", path);
+                        let map = Self::parse_m3_map_from_json(&content).unwrap_or_default();
+                        return Some((colors, map));
+                    }
+                }
+            }
+        }
+
+        // 2. Fallback: run matugen directly if wallpaper is found
+        Self::generate_matugen_colors(prefer, scheme_type)
+    }
+
+    /// Invoke matugen to extract Material 3 colors directly from wallpaper,
+    /// using the Android 16 (M3) scheme generator.
+    pub fn generate_matugen_colors(
+        prefer: Option<&str>,
+        scheme_type: Option<&str>,
+    ) -> Option<(LayoutColors, HashMap<String, String>)> {
+        let wallpaper_path = Self::find_current_wallpaper()?;
+        let prefer = prefer.unwrap_or("saturation");
+        let scheme_type = scheme_type.unwrap_or("scheme-vibrant");
+        tracing::info!(
+            "Extracting Material 3 palette via matugen for {:?} (prefer={}, type={})",
+            wallpaper_path,
+            prefer,
+            scheme_type
+        );
+
+        let output = std::process::Command::new("matugen")
+            .arg("--prefer")
+            .arg(prefer)
+            .arg("-t")
+            .arg(scheme_type)
+            .arg("image")
+            .arg(wallpaper_path)
+            .arg("-j")
+            .arg("hex")
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            tracing::warn!("matugen command returned non-zero status");
+            return None;
+        }
+
+        let json_str = String::from_utf8(output.stdout).ok()?;
+        let colors = Self::parse_m3_from_json(&json_str)?;
+        let map = Self::parse_m3_map_from_json(&json_str).unwrap_or_default();
+        Some((colors, map))
+    }
+
+    /// Locate active wallpaper from hyprctl hyprpaper listactive, ~/.config/hypr/hyprpaper.conf or standard paths
+    fn find_current_wallpaper() -> Option<PathBuf> {
+        // 1. Query live active wallpaper from hyprpaper daemon
+        if let Ok(output) = std::process::Command::new("hyprctl")
+            .args(["hyprpaper", "listactive"])
+            .output()
+        {
+            if output.status.success() {
+                let out_str = String::from_utf8_lossy(&output.stdout);
+                for line in out_str.lines() {
+                    let trimmed = line.trim();
+                    if let Some(idx) = trimmed.find(':') {
+                        let path_str = trimmed[idx + 1..].trim();
+                        let p = PathBuf::from(path_str);
+                        if p.exists() {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check ~/.config/hypr/hyprpaper.conf
+        if let Ok(home) = std::env::var("HOME") {
+            let conf_path = PathBuf::from(&home).join(".config/hypr/hyprpaper.conf");
+            if conf_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&conf_path) {
+                    for line in content.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("path =") || trimmed.starts_with("preload =") || trimmed.starts_with("wallpaper =") {
+                            let parts: Vec<&str> = trimmed.split('=').collect();
+                            if parts.len() >= 2 {
+                                let mut candidate = parts[parts.len() - 1].trim();
+                                if let Some(idx) = candidate.find(',') {
+                                    candidate = candidate[idx + 1..].trim();
+                                }
+                                let p = PathBuf::from(candidate);
+                                if p.exists() {
+                                    return Some(p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Check ~/Pictures/wallpapers/wallpaper.png or common directories
+            let fallback_pic = PathBuf::from(&home).join("Pictures/wallpapers/wallpaper.png");
+            if fallback_pic.exists() {
+                return Some(fallback_pic);
+            }
+        }
+        None
+    }
+
+    /// Merge generated Matugen colors into the layout's color settings.
+    /// When matugen is enabled, Material 3 dynamic colors take precedence.
+    pub fn apply_matugen_colors(&mut self, m3: LayoutColors) {
+        if let Some(existing) = &mut self.colors {
+            if let Some(c) = m3.dock_bg { existing.dock_bg = Some(c); }
+            if let Some(c) = m3.key_bg { existing.key_bg = Some(c); }
+            if let Some(c) = m3.key_bg_pressed { existing.key_bg_pressed = Some(c); }
+            if let Some(c) = m3.clipboard_bg { existing.clipboard_bg = Some(c); }
+            if let Some(c) = m3.text_color { existing.text_color = Some(c); }
+            if let Some(c) = m3.text_color_pressed { existing.text_color_pressed = Some(c); }
+            if let Some(c) = m3.sub_color { existing.sub_color = Some(c); }
+            if let Some(c) = m3.icon_color { existing.icon_color = Some(c); }
+            if let Some(c) = m3.icon_color_pressed { existing.icon_color_pressed = Some(c); }
+            if let Some(c) = m3.accent_color { existing.accent_color = Some(c); }
+            if let Some(c) = m3.border_color { existing.border_color = Some(c); }
+            if let Some(c) = m3.preview_bg_color { existing.preview_bg_color = Some(c); }
+            if let Some(c) = m3.preview_text_color { existing.preview_text_color = Some(c); }
+            if let Some(c) = m3.preview_border_color { existing.preview_border_color = Some(c); }
+        } else {
+            self.colors = Some(m3);
+        }
+    }
     /// Locate and load a layout from either:
     /// 1. An explicit file path: `/path/to/layout.json` or `./my_layout.json`
     /// 2. A layout name in `~/.config/hyprosk/layouts/<name>.json`
@@ -198,8 +494,18 @@ impl CustomLayoutFile {
             tracing::info!("Loading custom layout from {:?}", path);
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("Failed to read layout file at {:?}: {}", path, e))?;
-            let parsed: Self = serde_json::from_str(&content)
+            let mut parsed: Self = serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("Failed to parse layout JSON in {:?}: {}", path, e))?;
+            if parsed.matugen.unwrap_or(false) {
+                if let Some((m3_colors, m3_map)) = Self::resolve_matugen_colors(
+                    parsed.matugen_file.as_deref(),
+                    parsed.matugen_prefer.as_deref(),
+                    parsed.matugen_type.as_deref(),
+                ) {
+                    parsed.m3_map = m3_map;
+                    parsed.apply_matugen_colors(m3_colors);
+                }
+            }
             return Ok(parsed);
         }
 
@@ -208,14 +514,34 @@ impl CustomLayoutFile {
         match clean_name {
             "desktop" => {
                 tracing::info!("Using embedded default desktop layout");
-                let parsed: Self = serde_json::from_str(DEFAULT_DESKTOP_LAYOUT)
+                let mut parsed: Self = serde_json::from_str(DEFAULT_DESKTOP_LAYOUT)
                     .map_err(|e| anyhow::anyhow!("Failed to parse embedded desktop layout JSON: {}", e))?;
+                if parsed.matugen.unwrap_or(false) {
+                    if let Some((m3_colors, m3_map)) = Self::resolve_matugen_colors(
+                        parsed.matugen_file.as_deref(),
+                        parsed.matugen_prefer.as_deref(),
+                        parsed.matugen_type.as_deref(),
+                    ) {
+                        parsed.m3_map = m3_map;
+                        parsed.apply_matugen_colors(m3_colors);
+                    }
+                }
                 Ok(parsed)
             }
             "mobile" => {
                 tracing::info!("Using embedded default mobile layout");
-                let parsed: Self = serde_json::from_str(DEFAULT_MOBILE_LAYOUT)
+                let mut parsed: Self = serde_json::from_str(DEFAULT_MOBILE_LAYOUT)
                     .map_err(|e| anyhow::anyhow!("Failed to parse embedded mobile layout JSON: {}", e))?;
+                if parsed.matugen.unwrap_or(false) {
+                    if let Some((m3_colors, m3_map)) = Self::resolve_matugen_colors(
+                        parsed.matugen_file.as_deref(),
+                        parsed.matugen_prefer.as_deref(),
+                        parsed.matugen_type.as_deref(),
+                    ) {
+                        parsed.m3_map = m3_map;
+                        parsed.apply_matugen_colors(m3_colors);
+                    }
+                }
                 Ok(parsed)
             }
             _ => Err(anyhow::anyhow!("Layout file not found at {:?}", path)),
@@ -326,7 +652,7 @@ impl CustomLayoutFile {
                     RowDef::Simple(defs) => {
                         let keys: Vec<Key> = defs
                             .iter()
-                            .map(|def| convert_key_def(def, auto_upper, caps_lock))
+                            .map(|def| convert_key_def(def, auto_upper, caps_lock, Some(&self.m3_map)))
                             .collect();
                         KeyboardRow::new(keys)
                     }
@@ -334,7 +660,7 @@ impl CustomLayoutFile {
                         let keys: Vec<Key> = obj
                             .keys
                             .iter()
-                            .map(|def| convert_key_def(def, auto_upper, caps_lock))
+                            .map(|def| convert_key_def(def, auto_upper, caps_lock, Some(&self.m3_map)))
                             .collect();
                         let mut row = KeyboardRow::new(keys);
                         row.margin_bottom = obj.margin_bottom;
@@ -363,6 +689,9 @@ impl CustomLayoutFile {
             blur: self.blur,
             opacity: self.opacity,
             key_opacity: self.key_opacity,
+            preview_enabled: self.preview_enabled,
+            preview_height: self.preview_height,
+            preview_font_size: self.preview_font_size,
             colors: self.colors.clone(),
         };
 
@@ -372,7 +701,12 @@ impl CustomLayoutFile {
     }
 }
 
-fn convert_key_def(def: &KeyDef, auto_upper: bool, caps_lock: bool) -> Key {
+fn convert_key_def(
+    def: &KeyDef,
+    auto_upper: bool,
+    caps_lock: bool,
+    m3_map: Option<&HashMap<String, String>>,
+) -> Key {
     match def {
         KeyDef::Simple(s) => {
             let label = if auto_upper && s.chars().count() == 1 {
@@ -414,6 +748,17 @@ fn convert_key_def(def: &KeyDef, auto_upper: bool, caps_lock: bool) -> Key {
             key.secondary_font_size = obj.secondary_font_size;
             key.height = obj.height;
             key.width_px = obj.width_px;
+            key.bg_color = CustomLayoutFile::resolve_color(obj.bg_color.as_deref(), m3_map);
+            key.bg_color_pressed =
+                CustomLayoutFile::resolve_color(obj.bg_color_pressed.as_deref(), m3_map);
+            key.text_color = CustomLayoutFile::resolve_color(obj.text_color.as_deref(), m3_map);
+            key.text_color_pressed =
+                CustomLayoutFile::resolve_color(obj.text_color_pressed.as_deref(), m3_map);
+            key.icon_color = CustomLayoutFile::resolve_color(obj.icon_color.as_deref(), m3_map);
+            key.icon_color_pressed =
+                CustomLayoutFile::resolve_color(obj.icon_color_pressed.as_deref(), m3_map);
+            key.border_color =
+                CustomLayoutFile::resolve_color(obj.border_color.as_deref(), m3_map);
             key
         }
     }

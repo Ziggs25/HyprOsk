@@ -24,6 +24,20 @@ impl RenderEngine {
         total_height: u32,
         _theme: &Theme,
     ) -> Vec<Vec<(Rect, usize)>> {
+        Self::calculate_key_rects_with_scroll(layout, total_width, total_height, _theme, 0.0)
+    }
+
+    /// Same as [`Self::calculate_key_rects`] but offsets clipboard card rows
+    /// vertically by `-scroll_px` (clamped by the caller to `0..=max`).
+    /// The top bar (row 0) and the pinned bottom row stay fixed so the card
+    /// grid scrolls between them.
+    pub fn calculate_key_rects_with_scroll(
+        layout: &KeyboardLayout,
+        total_width: u32,
+        total_height: u32,
+        _theme: &Theme,
+        scroll_px: f32,
+    ) -> Vec<Vec<(Rect, usize)>> {
         let is_mobile = layout.is_mobile() || total_width < 600;
         let padding_x = layout.padding_x.unwrap_or(if is_mobile { 3.5 } else { 8.0 });
         let padding_y = layout.padding_y.unwrap_or(if is_mobile { 4.0 } else { 8.0 });
@@ -40,13 +54,51 @@ impl RenderEngine {
         let remaining_height = (total_height as f32 - (2.0 * padding_y) - top_row_height - (num_rows as f32 * row_spacing)).max(10.0);
         let default_key_row_height = layout.key_height.unwrap_or((remaining_height / (num_rows - 1).max(1) as f32).max(10.0));
 
+        // Clipboard layouts have few rows (top + N card rows + bottom), so the
+        // generic `remaining / (num_rows - 1)` formula yields a huge bottom row
+        // (~125px when num_rows == 3). Compute a standard key-row height from a
+        // normal 4-key-row keyboard and pin the clipboard bottom row
+        // (ABC / Space / Backspace) to it.
+        let is_clipboard_layout = layout.rows.iter().any(|r| r.keys.iter().any(|k| k.is_clipboard));
+        let standard_remaining =
+            (total_height as f32 - (2.0 * padding_y) - top_row_height - (4.0 * row_spacing)).max(10.0);
+        let standard_key_row_height =
+            layout.key_height.unwrap_or((standard_remaining / 4.0).clamp(50.0, 54.0));
+        // Fixed footer for clipboard mode: the bottom (non-clipboard) row is
+        // pinned to the bottom edge so the card area above it can scroll.
+        let clipboard_bottom_idx = if is_clipboard_layout && num_rows > 1 {
+            let last_is_clipboard = layout.rows[num_rows - 1]
+                .keys
+                .iter()
+                .all(|k| k.is_clipboard);
+            if last_is_clipboard { None } else { Some(num_rows - 1) }
+        } else {
+            None
+        };
+        let clipboard_footer_y =
+            (total_height as f32 - padding_y - standard_key_row_height).max(padding_y);
+
         let mut result = Vec::with_capacity(num_rows);
 
         let mut current_y = padding_y;
 
         for (r_idx, row) in layout.rows.iter().enumerate() {
-            let row_height = if r_idx == 0 { top_row_height } else { default_key_row_height };
+            let is_clipboard_row = r_idx > 0
+                && !row.keys.is_empty()
+                && row.keys.iter().all(|k| k.is_clipboard);
+            let is_clipboard_bottom =
+                is_clipboard_layout && Some(r_idx) == clipboard_bottom_idx;
+            let row_height = if r_idx == 0 {
+                top_row_height
+            } else if is_clipboard_bottom {
+                standard_key_row_height
+            } else {
+                default_key_row_height
+            };
             let mut row_rects = Vec::with_capacity(row.keys.len());
+            // Y-advance for this row; clipboard chips override this with their
+            // capped height so cards stack compactly at the top (Gboard-like).
+            let mut used_row_h = row_height;
 
             if r_idx == 0 && row.keys.len() >= 2 {
                 let num_center = row.keys.len() - 2;
@@ -82,86 +134,232 @@ impl RenderEngine {
                 // Right button: Hide
                 let x_hide = right_start_x;
                 row_rects.push((Rect { x: x_hide, y: current_y, w: action_width, h: row_height }, 1 + num_center));
-            } else {
+            } else if is_clipboard_row {
+                // HeliBoard/Gboard-style clipboard chips: compact cards in a
+                // 4-column grid, NOT stretched pills. A row with only 1-2
+                // history entries would otherwise expand each item across the
+                // full keyboard width (and a single row would also stretch to
+                // fill the full height). Cap item width to one full-grid cell
+                // (max ~220px desktop / ~160px mobile) and cap height so chips
+                // stay compact; left-align the row and leave leftover space as
+                // clipboard background. Long-text cards (weight > 1, set in
+                // `layouts.rs` for >35 chars) may span multiple cells.
+                const CLIPBOARD_MAX_COLUMNS: f32 = 4.0;
+                let grid_cell_w = ((total_width as f32 - 2.0 * padding_x
+                    - (CLIPBOARD_MAX_COLUMNS - 1.0) * spacing)
+                    / CLIPBOARD_MAX_COLUMNS)
+                    .max(10.0);
+                let max_card_w = if is_mobile { 160.0 } else { 220.0 };
+                // Compact card height: default ~46px (set explicitly in
+                // `layouts.rs`), taller for long previews, never the
+                // stretched fill.
+                let chip_h = row_height.min(if is_mobile { 76.0 } else { 88.0 });
                 let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
                 let num_keys = row.keys.len();
-
-                // Sum of explicit extra margins on keys
+                let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
                 let explicit_key_margins: f32 = row.keys.iter().map(|k| {
                     k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0)
                 }).sum();
-
-                // Check if any key has explicit px width or layout has key_width
-                let has_explicit_key_w = layout.key_width.is_some() || row.keys.iter().any(|k| k.width_px.is_some());
-
-                // Gboard / HeliBoard: Row 2 has 9 keys (a-l) centered against Row 1's 10 keys (q-p).
-                // When in mobile/portrait and a row has 9 keys of weight 1.0, use the exact single-key width
-                // from a 10-key row and center the entire 9-key row with equal left and right margins!
-                let is_centered_9_key_row = !has_explicit_key_w
-                    && is_mobile
-                    && num_keys == 9
-                    && (total_weights - 9.0).abs() < 0.05
-                    && explicit_key_margins == 0.0;
-
-                if is_centered_9_key_row {
-                    let w_10 = total_width as f32 - (2.0 * padding_x) - (9.0 * spacing);
-                    let single_key_w = (w_10 / 10.0).max(10.0);
-                    let row_w = 9.0 * single_key_w + 8.0 * spacing;
-                    let indent = ((total_width as f32 - row_w) * 0.5).max(padding_x);
-
-                    let mut current_x = indent;
-                    for (k_idx, key) in row.keys.iter().enumerate() {
-                        let final_h = key.height.unwrap_or(row_height);
-                        let rect = Rect {
-                            x: current_x,
-                            y: current_y,
-                            w: single_key_w,
-                            h: final_h,
-                        };
-                        row_rects.push((rect, k_idx));
-                        current_x += single_key_w + spacing;
+                let avail_width = total_width as f32 - (2.0 * padding_x) - base_spacing_total - explicit_key_margins;
+                // Apply vertical swipe scroll: card rows slide up, header and
+                // pinned footer stay fixed.
+                let scrolled_y = (current_y - scroll_px).max(0.0);
+                let mut current_x = padding_x;
+                let mut max_h_in_row = 10.0f32;
+                for (k_idx, key) in row.keys.iter().enumerate() {
+                    if let Some(ml) = key.margin_left {
+                        current_x += ml;
                     }
-                } else {
-                    let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
-                    let avail_width = total_width as f32 - (2.0 * padding_x) - base_spacing_total - explicit_key_margins;
-                    let mut current_x = padding_x;
-
-                    for (k_idx, key) in row.keys.iter().enumerate() {
-                        if let Some(ml) = key.margin_left {
-                            current_x += ml;
-                        }
-                        let key_width = if let Some(w_px) = key.width_px {
-                            w_px
-                        } else if let Some(def_kw) = layout.key_width {
-                            (def_kw * key.width_weight).max(10.0)
-                        } else {
-                            (avail_width * (key.width_weight / total_weights)).max(10.0)
-                        };
-                        let final_h = key.height.unwrap_or(row_height);
-                        let rect = Rect {
-                            x: current_x,
-                            y: current_y,
-                            w: key_width,
-                            h: final_h,
-                        };
-                        row_rects.push((rect, k_idx));
-                        current_x += key_width;
-                        if let Some(mr) = key.margin_right {
-                            current_x += mr;
-                        }
-                        if k_idx + 1 < num_keys {
-                            current_x += spacing;
-                        }
+                    let stretched_w = if let Some(w_px) = key.width_px {
+                        w_px
+                    } else if let Some(def_kw) = layout.key_width {
+                        (def_kw * key.width_weight).max(10.0)
+                    } else {
+                        (avail_width * (key.width_weight / total_weights)).max(10.0)
+                    };
+                    // Default cards cap to one cell (~220/160); long-text
+                    // cards (weight 2.0) may span two cells.
+                    let weight_cap = grid_cell_w * key.width_weight.max(1.0);
+                    let max_cap = max_card_w * key.width_weight.max(1.0);
+                    let chip_w = stretched_w.min(weight_cap).min(max_cap);
+                    let final_h = key.height.unwrap_or(chip_h.min(46.0));
+                    max_h_in_row = max_h_in_row.max(final_h);
+                    row_rects.push((
+                        Rect { x: current_x, y: scrolled_y, w: chip_w, h: final_h },
+                        k_idx,
+                    ));
+                    current_x += chip_w;
+                    if let Some(mr) = key.margin_right {
+                        current_x += mr;
+                    }
+                    if k_idx + 1 < num_keys {
+                        current_x += spacing;
                     }
                 }
-            }
+                used_row_h = max_h_in_row;
+                } else {
+                    // Pinned footer: the clipboard bottom row (ABC/Space/Backspace)
+                    // sits at the bottom edge with the standard key-row height,
+                    // independent of how many card rows stack above it.
+                    let base_y = if is_clipboard_bottom {
+                        clipboard_footer_y
+                    } else {
+                        current_y
+                    };
+                    // Keep the footer pinned even for Y-advance bookkeeping.
+                    if is_clipboard_bottom {
+                        used_row_h = row_height;
+                    }
+                    let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
+                    let num_keys = row.keys.len();
+
+                    // Sum of explicit extra margins on keys
+                    let explicit_key_margins: f32 = row.keys.iter().map(|k| {
+                        k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0)
+                    }).sum();
+
+                    // Check if any key has explicit px width or layout has key_width
+                    let has_explicit_key_w = layout.key_width.is_some() || row.keys.iter().any(|k| k.width_px.is_some());
+
+                    // Gboard / HeliBoard: Row 2 has 9 keys (a-l) centered against Row 1's 10 keys (q-p).
+                    // When in mobile/portrait and a row has 9 keys of weight 1.0, use the exact single-key width
+                    // from a 10-key row and center the entire 9-key row with equal left and right margins!
+                    let is_centered_9_key_row = !has_explicit_key_w
+                        && is_mobile
+                        && num_keys == 9
+                        && (total_weights - 9.0).abs() < 0.05
+                        && explicit_key_margins == 0.0;
+
+                    if is_centered_9_key_row {
+                        let w_10 = total_width as f32 - (2.0 * padding_x) - (9.0 * spacing);
+                        let single_key_w = (w_10 / 10.0).max(10.0);
+                        let row_w = 9.0 * single_key_w + 8.0 * spacing;
+                        let indent = ((total_width as f32 - row_w) * 0.5).max(padding_x);
+
+                        let mut current_x = indent;
+                        for (k_idx, key) in row.keys.iter().enumerate() {
+                            let final_h = key.height.unwrap_or(row_height);
+                            let rect = Rect {
+                                x: current_x,
+                                y: base_y,
+                                w: single_key_w,
+                                h: final_h,
+                            };
+                            row_rects.push((rect, k_idx));
+                            current_x += single_key_w + spacing;
+                        }
+                    } else {
+                        let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
+                        let avail_width = total_width as f32 - (2.0 * padding_x) - base_spacing_total - explicit_key_margins;
+                        let mut current_x = padding_x;
+
+                        for (k_idx, key) in row.keys.iter().enumerate() {
+                            if let Some(ml) = key.margin_left {
+                                current_x += ml;
+                            }
+                            let key_width = if let Some(w_px) = key.width_px {
+                                w_px
+                            } else if let Some(def_kw) = layout.key_width {
+                                (def_kw * key.width_weight).max(10.0)
+                            } else {
+                                (avail_width * (key.width_weight / total_weights)).max(10.0)
+                            };
+                            let final_h = key.height.unwrap_or(row_height);
+                            let rect = Rect {
+                                x: current_x,
+                                y: base_y,
+                                w: key_width,
+                                h: final_h,
+                            };
+                            row_rects.push((rect, k_idx));
+                            current_x += key_width;
+                            if let Some(mr) = key.margin_right {
+                                current_x += mr;
+                            }
+                            if k_idx + 1 < num_keys {
+                                current_x += spacing;
+                            }
+                        }
+                    }
+            } // end clipboard vs. normal row
 
             let v_gap = row.margin_bottom.unwrap_or(row_spacing);
-            current_y += row_height + v_gap;
+            if Some(r_idx) == clipboard_bottom_idx {
+                current_y = clipboard_footer_y + used_row_h + v_gap;
+            } else {
+                current_y += used_row_h + v_gap;
+            }
             result.push(row_rects);
         }
 
         result
+    }
+
+    /// Metrics for the scrollable clipboard card area, computed from the
+    /// unscrolled (`scroll_px == 0`) geometry.
+    ///
+    /// Returns `(viewport_top, viewport_h, content_h, max_scroll)` where
+    /// `viewport_top` is the Y of the first card row, `viewport_h` the visible
+    /// height above the pinned footer, `content_h` the stacked height of all
+    /// card rows, and `max_scroll = (content_h - viewport_h).max(0)`.
+    /// Returns `None` when the layout has no clipboard card rows.
+    pub fn clipboard_scroll_metrics(
+        layout: &KeyboardLayout,
+        total_width: u32,
+        total_height: u32,
+        theme: &Theme,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let has_cards = layout.rows.iter().any(|r| {
+            !r.keys.is_empty() && r.keys.iter().all(|k| k.is_clipboard)
+        });
+        if !has_cards {
+            return None;
+        }
+        let base = Self::calculate_key_rects(layout, total_width, total_height, theme);
+        let is_mobile = layout.is_mobile() || total_width < 600;
+        let spacing = layout.key_spacing.unwrap_or(if is_mobile { 4.0 } else { 8.0 });
+        let row_spacing = layout.row_spacing.unwrap_or(spacing);
+
+        let mut first_card_y: Option<f32> = None;
+        let mut content_bottom = 0.0f32;
+        for (r_idx, row) in layout.rows.iter().enumerate() {
+            let is_card = r_idx > 0
+                && !row.keys.is_empty()
+                && row.keys.iter().all(|k| k.is_clipboard);
+            if !is_card {
+                continue;
+            }
+            let Some(rects) = base.get(r_idx) else {
+                continue;
+            };
+            for (rect, _) in rects {
+                if first_card_y.is_none() {
+                    first_card_y = Some(rect.y);
+                }
+                content_bottom = content_bottom.max(rect.y + rect.h);
+            }
+        }
+        let viewport_top = first_card_y?;
+        // Pinned footer is the last non-clipboard row in clipboard layouts.
+        let footer_top = base
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(r_idx, rects)| {
+                let row = layout.rows.get(r_idx)?;
+                let is_card =
+                    !row.keys.is_empty() && row.keys.iter().all(|k| k.is_clipboard);
+                if r_idx > 0 && !is_card && !rects.is_empty() {
+                    Some(rects[0].0.y)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(total_height as f32);
+        let viewport_h = (footer_top - viewport_top - row_spacing).max(10.0);
+        let content_h = (content_bottom - viewport_top).max(0.0);
+        let max_scroll = (content_h - viewport_h).max(0.0);
+        Some((viewport_top, viewport_h, content_h, max_scroll))
     }
 
     pub fn hit_test<'a>(
@@ -172,6 +370,33 @@ impl RenderEngine {
     ) -> Option<(usize, usize, &'a Key)> {
         let px = x as f32;
         let py = y as f32;
+
+        // In clipboard mode the pinned header/footer must win over card rows
+        // that have scrolled underneath them, so test non-card rows first.
+        let has_clipboard = layout
+            .rows
+            .iter()
+            .any(|r| r.keys.iter().any(|k| k.is_clipboard));
+        if has_clipboard {
+            for (r_idx, row_rects) in key_rects.iter().enumerate() {
+                let is_card = layout
+                    .rows
+                    .get(r_idx)
+                    .map(|r| !r.keys.is_empty() && r.keys.iter().all(|k| k.is_clipboard))
+                    .unwrap_or(false);
+                if is_card {
+                    continue;
+                }
+                for (rect, k_idx) in row_rects {
+                    if rect.contains(px, py)
+                        && let Some(row) = layout.rows.get(r_idx)
+                        && let Some(key) = row.keys.get(*k_idx)
+                    {
+                        return Some((r_idx, *k_idx, key));
+                    }
+                }
+            }
+        }
 
         for (r_idx, row_rects) in key_rects.iter().enumerate() {
             for (rect, k_idx) in row_rects {
@@ -254,7 +479,7 @@ impl RenderEngine {
                 };
 
                 if layout.blur.unwrap_or(false) && !is_active && (!is_suggestion_bar || key.is_special) {
-                    let key_alpha = (layout.key_opacity.unwrap_or(0.50) * 255.0).clamp(0.0, 255.0) as u8;
+                    let key_alpha = (layout.key_opacity.unwrap_or(0.90) * 255.0).clamp(0.0, 255.0) as u8;
                     key_bg.a = key_alpha;
                 }
 

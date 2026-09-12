@@ -23,6 +23,20 @@ export struct Key {
     is-functional: bool,
     is-pinned: bool,
     has-border: bool,
+    has-custom-bg: bool,
+    bg-color: color,
+    has-custom-bg-pressed: bool,
+    bg-color-pressed: color,
+    has-custom-text: bool,
+    text-color: color,
+    has-custom-text-pressed: bool,
+    text-color-pressed: color,
+    has-custom-icon: bool,
+    icon-color: color,
+    has-custom-icon-pressed: bool,
+    icon-color-pressed: color,
+    has-custom-border: bool,
+    border-color: color,
 }
 
 export global OskTheme {
@@ -39,6 +53,10 @@ export global OskTheme {
     in-out property <color> border-color: #585b70;
     in-out property <color> suggest-bg: rgba(255, 255, 255, 0.05);
     in-out property <color> suggest-bg-pressed: rgba(255, 255, 255, 0.18);
+    in-out property <color> preview-bg: #2d2d2d;
+    in-out property <color> preview-text: #ffffff;
+    in-out property <color> preview-border: #444444;
+    in-out property <length> preview-font-size: 34px;
     in-out property <length> suggest-text-size: 21px;
     in-out property <length> label-size: 27px;
     in-out property <length> functional-size: 21px;
@@ -155,20 +173,20 @@ component KeyVisual {
             x: parent.width - 22px; y: (parent.height - 16px) / 2;
             width: 16px; height: 16px;
             source: OskIcons.pin;
-            colorize: #89b4fa;
+            colorize: OskTheme.accent-color;
             visible: false;
         }
     }
 
     if k.key-type == KeyType.clipboard-back : Rectangle {
-        background: k.is-pressed ? #333333 : #222222;
+        background: k.is-pressed ? OskTheme.key-bg-pressed : OskTheme.key-bg;
         border-radius: 12px;
         Text {
             x: 0; y: 0; width: parent.width; height: parent.height;
             text: "⌨ Back";
             font-size: 15px;
             font-weight: 500;
-            color: #fff;
+            color: k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -203,10 +221,14 @@ component KeyVisual {
         y: k.is-pressed ? 2px : 0px;
         width: k.w - (k.is-pressed ? 4px : 0px);
         height: k.h - (k.is-pressed ? 4px : 0px);
-        background: k.key-type == KeyType.suggestion
-            ? (k.is-pressed ? OskTheme.suggest-bg-pressed : OskTheme.suggest-bg)
-            : (k.icon == 34 ? #363a4f : (k.is-pressed ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent)));
-        border-color: k.icon == 34 ? OskTheme.accent-color : (k.is-pressed ? OskTheme.border-color : transparent);
+        background: k.has-custom-bg
+            ? (k.is-pressed ? (k.has-custom-bg-pressed ? k.bg-color-pressed : OskTheme.key-bg-pressed) : k.bg-color)
+            : (k.key-type == KeyType.suggestion
+                ? (k.is-pressed ? OskTheme.suggest-bg-pressed : OskTheme.suggest-bg)
+                : (k.icon == 34 ? OskTheme.key-bg-pressed : (k.is-pressed ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent))));
+        border-color: k.has-custom-border
+            ? k.border-color
+            : (k.icon == 34 ? OskTheme.accent-color : (k.is-pressed ? OskTheme.border-color : transparent));
         border-width: (k.icon == 34 || k.is-pressed) ? 1.5px : 0px;
         border-radius: k.key-type == KeyType.suggestion ? 8px : (k.key-type == KeyType.space ? OskTheme.space-radius : OskTheme.key-radius);
 
@@ -217,7 +239,9 @@ component KeyVisual {
             width: OskTheme.icon-size;
             height: OskTheme.icon-size;
             source: OskIcons.get(k.icon);
-            colorize: (k.icon == 34 || k.is-pressed) ? OskTheme.icon-color-pressed : OskTheme.icon-color;
+            colorize: k.has-custom-icon
+                ? (k.is-pressed ? (k.has-custom-icon-pressed ? k.icon-color-pressed : OskTheme.icon-color-pressed) : k.icon-color)
+                : ((k.icon == 34 || k.is-pressed) ? OskTheme.icon-color-pressed : OskTheme.icon-color);
             image-fit: contain;
         }
         Text {
@@ -227,7 +251,9 @@ component KeyVisual {
             font-family: "DejaVu Sans";
             font-size: k.is-functional ? OskTheme.functional-size : OskTheme.label-size;
             font-weight: 500;
-            color: k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color;
+            color: k.has-custom-text
+                ? (k.is-pressed ? (k.has-custom-text-pressed ? k.text-color-pressed : OskTheme.text-color-pressed) : k.text-color)
+                : (k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color);
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -270,6 +296,8 @@ export component OskUi inherits Window {
 
     in-out property <[Key]> keys;
     in property <bool> show-clipboard: false;
+    in property <bool> clipboard-scrollbar-visible: false;
+    in property <float> clipboard-scroll-ratio: 0;
     in property <bool> hold-preview-visible: false;
     in property <string> hold-preview-label: "";
     in property <length> hold-preview-x;
@@ -291,6 +319,19 @@ export component OskUi inherits Window {
         border-radius: 14px;
     }
 
+    // Floating scrollbar indicator pill on the LEFT edge of the clipboard
+    // view. Tracks vertical swipe scroll progress (0 = top, 1 = bottom).
+    Rectangle {
+        visible: root.show-clipboard && root.clipboard-scrollbar-visible;
+        x: 12px;
+        y: 66px + root.clipboard-scroll-ratio * (parent.height - 70px - 44px);
+        width: 4px;
+        height: 36px;
+        background: OskTheme.accent-color;
+        border-radius: 2px;
+        opacity: 0.85;
+    }
+
     for k in keys: KeyVisual {
         k: k;
     }
@@ -301,25 +342,28 @@ export component OskUi inherits Window {
         y: root.hold-preview-y;
         width: root.hold-preview-w;
         height: root.hold-preview-h;
-        background: #2d2d2d;
-        border-radius: 12px;
+        background: OskTheme.preview-bg;
+        border-radius: 14px;
         border-width: 1px;
-        border-color: #444444;
+        border-color: OskTheme.preview-border;
         Text {
-            x: 0; y: 0; width: parent.width; height: parent.height;
+            x: 0;
+            y: 12px;
+            width: parent.width;
+            height: 56px;
             text: root.hold-preview-label;
-            font-size: 34px;
+            font-size: OskTheme.preview-font-size;
             font-weight: 600;
-            color: #ffffff;
+            color: OskTheme.preview-text;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         Rectangle {
-            x: (parent.width - 12px) / 2;
+            x: (parent.width - 14px) / 2;
             y: parent.height - 1px;
-            width: 12px;
-            height: 6px;
-            background: #2d2d2d;
+            width: 14px;
+            height: 7px;
+            background: OskTheme.preview-bg;
         }
     }
 }

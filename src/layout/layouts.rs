@@ -46,6 +46,14 @@ pub struct KeyboardLayout {
     pub opacity: Option<f32>,
     /// Optional key background opacity override (e.g. 0.50)
     pub key_opacity: Option<f32>,
+    /// Whether the hold-to-preview popup for secondary labels is shown.
+    /// `Some(false)` disables it; default (None) means enabled.
+    pub preview_enabled: Option<bool>,
+    /// Explicit hold-preview popup height in pixels.
+    /// If unset, defaults to 1.65x key height (min 115px).
+    pub preview_height: Option<f32>,
+    /// Hold-preview popup label font size in pixels (default 34).
+    pub preview_font_size: Option<f32>,
     /// Optional color palette overrides
     pub colors: Option<crate::layout::custom::LayoutColors>,
 }
@@ -130,6 +138,9 @@ impl KeyboardLayout {
             blur: None,
             opacity: None,
             key_opacity: None,
+            preview_enabled: None,
+            preview_height: None,
+            preview_font_size: None,
             colors: None,
         }
     }
@@ -139,21 +150,55 @@ impl KeyboardLayout {
     /// Row 1: ◀ Back · header
     /// Rows 2-3: up to 8 history entries presented as suggestion pills;
     /// tapping an entry pastes it.
+    /// Last row: ABC (back to letters) · Space · ⌫ (standard key row).
+    ///
+    /// HeliBoard/Gboard-style chips: entries are laid out in a
+    /// [`CLIPBOARD_MAX_COLUMNS`]-column grid. Geometry is capped in
+    /// `RenderEngine::calculate_key_rects` so a row with only 1-2 entries
+    /// renders as compact left-aligned cards (one full-grid cell each) rather
+    /// than stretching across the entire keyboard width.
+    pub const CLIPBOARD_MAX_COLUMNS: usize = 4;
     #[allow(clippy::needless_lifetimes)]
     pub fn clipboard(history: &[String], suggestions: &[String]) -> Self {
-        let top = vec![
-            Key::new("◀ Back", KeyAction::Clipboard).with_weight(0.8).special().clipboard(),
-            Key::new("Clipboard History", KeyAction::None).with_weight(3.0).special().clipboard(),
-        ];
+        // Row 0: Top action bar.
+        // Key 0: ◀ Back (KeyAction::Clipboard)
+        // Middle: suggestions (or "Clipboard History" title if none)
+        // Right: KeyAction::Hide (closes keyboard)
+        let mut top_keys = Vec::new();
+        let action_weight = 0.35;
+        top_keys.push(Key::new("◀ Back", KeyAction::Clipboard).with_weight(action_weight).special().clipboard());
 
-        let mut rows = vec![KeyboardRow::new(top)];
+        let s0 = suggestions.first().map(|s| s.as_str()).unwrap_or("Clipboard History");
+        let s1 = suggestions.get(1).map(|s| s.as_str()).unwrap_or("");
+        let s2 = suggestions.get(2).map(|s| s.as_str()).unwrap_or("");
+
+        top_keys.push(Key::suggestion(0, s0).with_weight(1.0));
+        top_keys.push(Key::suggestion(1, s1).with_weight(1.3));
+        top_keys.push(Key::suggestion(2, s2).with_weight(1.0));
+
+        top_keys.push(Key::new("", KeyAction::Hide).with_weight(action_weight).special());
+
+        let mut rows = vec![KeyboardRow::new(top_keys)];
         let mut idx = 0usize;
-        for chunk in history.chunks(4) {
+        for chunk in history.chunks(Self::CLIPBOARD_MAX_COLUMNS) {
             let row_keys: Vec<Key> = chunk
                 .iter()
                 .map(|text| {
                     let label = clipboard_label(text);
-                    let mut key = Key::new(label, KeyAction::ClipboardItem(idx)).special().clipboard();
+                    // Long entries (>35 chars) auto-adjust: span 2 columns
+                    // with a taller card so the 75-char preview stays readable.
+                    // Default cards stay compact at ~46px height.
+                    let is_long = text.chars().count() > 35;
+                    let (weight, height) = if is_long {
+                        (2.0, 52.0)
+                    } else {
+                        (1.0, 46.0)
+                    };
+                    let mut key = Key::new(label, KeyAction::ClipboardItem(idx))
+                        .special()
+                        .clipboard()
+                        .with_weight(weight)
+                        .with_height(height);
                     if idx == 0 {
                         key = key.pinned();
                     }
@@ -164,15 +209,40 @@ impl KeyboardLayout {
             rows.push(KeyboardRow::new(row_keys));
         }
 
-        Self::new(LayerId::Lower, rows).with_top_bar(suggestions)
+        // Bottom row: ABC (back to letters) · Space · Backspace.
+        rows.push(clipboard_bottom_row());
+
+        Self::new(LayerId::Lower, rows)
     }
 }
 
+/// Bottom row for the clipboard view (HeliBoard/Gboard-style).
+///
+/// ABC returns to the letter layer, Space types a space, ⌫ deletes.
+/// These are standard keys (NOT `is_clipboard` chips) so
+/// `RenderEngine::calculate_key_rects` gives them the normal key-row
+/// height instead of the compact clipboard-card geometry.
+fn clipboard_bottom_row() -> KeyboardRow {
+    KeyboardRow::new(vec![
+        Key::new("ABC", KeyAction::SwitchLayer(LayerId::Lower))
+            .with_weight(1.5)
+            .special(),
+        Key::new("Space", KeyAction::Space).with_weight(5.0),
+        Key::new("⌫", KeyAction::Backspace)
+            .with_weight(1.5)
+            .special(),
+    ])
+}
+
 fn clipboard_label(text: &str) -> String {
-    let mut label = text.to_string();
-    if label.chars().count() > 26 {
-        let cut: String = label.chars().take(26).collect();
-        label = format!("{cut}…");
+    // Collapse whitespace/newlines so multi-line copies preview on one card,
+    // then show up to 75 characters instead of cutting off at 26.
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim();
+    if trimmed.chars().count() > 75 {
+        let cut: String = trimmed.chars().take(75).collect();
+        format!("{cut}…")
+    } else {
+        trimmed.to_string()
     }
-    label
 }

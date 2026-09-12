@@ -117,6 +117,20 @@ pub struct Key {
     pub height: Option<f32>,
     /// Optional explicit width for this key in pixels
     pub width_px: Option<f32>,
+    /// Per-key custom background color (`#rrggbb` or M3 token, resolved at load)
+    pub bg_color: Option<String>,
+    /// Per-key custom pressed background color
+    pub bg_color_pressed: Option<String>,
+    /// Per-key custom label text color
+    pub text_color: Option<String>,
+    /// Per-key custom pressed label text color
+    pub text_color_pressed: Option<String>,
+    /// Per-key custom icon color
+    pub icon_color: Option<String>,
+    /// Per-key custom pressed icon color
+    pub icon_color_pressed: Option<String>,
+    /// Per-key custom border color
+    pub border_color: Option<String>,
 }
 
 impl Key {
@@ -140,6 +154,13 @@ impl Key {
             secondary_font_size: None,
             height: None,
             width_px: None,
+            bg_color: None,
+            bg_color_pressed: None,
+            text_color: None,
+            text_color_pressed: None,
+            icon_color: None,
+            icon_color_pressed: None,
+            border_color: None,
         }
     }
 
@@ -164,6 +185,13 @@ impl Key {
             secondary_font_size: None,
             height: None,
             width_px: None,
+            bg_color: None,
+            bg_color_pressed: None,
+            text_color: None,
+            text_color_pressed: None,
+            icon_color: None,
+            icon_color_pressed: None,
+            border_color: None,
         }
     }
 
@@ -187,6 +215,13 @@ impl Key {
             secondary_font_size: None,
             height: None,
             width_px: None,
+            bg_color: None,
+            bg_color_pressed: None,
+            text_color: None,
+            text_color_pressed: None,
+            icon_color: None,
+            icon_color_pressed: None,
+            border_color: None,
         }
     }
 
@@ -212,6 +247,51 @@ impl Key {
 
     pub fn pinned(mut self) -> Self {
         self.is_pinned = true;
+        self
+    }
+
+    pub fn with_width_px(mut self, w: f32) -> Self {
+        self.width_px = Some(w);
+        self
+    }
+
+    pub fn with_height(mut self, h: f32) -> Self {
+        self.height = Some(h);
+        self
+    }
+
+    pub fn with_bg_color(mut self, c: impl Into<String>) -> Self {
+        self.bg_color = Some(c.into());
+        self
+    }
+
+    pub fn with_bg_color_pressed(mut self, c: impl Into<String>) -> Self {
+        self.bg_color_pressed = Some(c.into());
+        self
+    }
+
+    pub fn with_text_color(mut self, c: impl Into<String>) -> Self {
+        self.text_color = Some(c.into());
+        self
+    }
+
+    pub fn with_text_color_pressed(mut self, c: impl Into<String>) -> Self {
+        self.text_color_pressed = Some(c.into());
+        self
+    }
+
+    pub fn with_icon_color(mut self, c: impl Into<String>) -> Self {
+        self.icon_color = Some(c.into());
+        self
+    }
+
+    pub fn with_icon_color_pressed(mut self, c: impl Into<String>) -> Self {
+        self.icon_color_pressed = Some(c.into());
+        self
+    }
+
+    pub fn with_border_color(mut self, c: impl Into<String>) -> Self {
+        self.border_color = Some(c.into());
         self
     }
 }

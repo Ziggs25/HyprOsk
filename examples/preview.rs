@@ -33,7 +33,7 @@ fn main() {
 
     let mut scene = SlintScene::new(W, H).expect("SlintScene::new");
     let mut argb = vec![0u8; (W * H * 4) as usize];
-    let damage = scene.render(&layout, &theme, W, H, &[(2, 0)], &[], None, None, argb.as_mut());
+    let damage = scene.render(&layout, &theme, W, H, &[(2, 0)], &[], None, None, 0.0, argb.as_mut());
     println!("render ok: {}", damage.is_some());
     assert!(damage.is_some());
 
