@@ -19,9 +19,10 @@ use smithay_client_toolkit::{
     delegate_seat, delegate_shm, delegate_touch, registry_handlers,
 };
 use std::collections::{HashMap, VecDeque};
+use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::atomic::Ordering;
 use wayland_client::{
@@ -63,6 +64,8 @@ const KEY_UP: u32 = 103;
 const KEY_DOWN: u32 = 108;
 const KEY_HOME: u32 = 102;
 const KEY_END: u32 = 107;
+const KEY_INSERT: u32 = 110;
+const KEY_V: u32 = 47;
 
 /// Number of SHM buffers to cycle through. The compositor holds a buffer until
 /// it releases it; a small ring decouples rendering from the release round-trip
@@ -887,7 +890,11 @@ impl WaylandState {
         if self.clipboard_mode {
             self.capture_clipboard();
         }
-        // Always reset swipe state when (re)opening the view.
+        // Always reset swipe and pressed state when (re)opening or closing the view.
+        self.pressed_keys.clear();
+        self.pressed_key = None;
+        self.press_instant = None;
+        self.hold_preview = None;
         self.clipboard_scroll_y = 0.0;
         self.clipboard_drag_start = None;
         self.clipboard_dragging = false;
@@ -959,6 +966,240 @@ impl WaylandState {
         None
     }
 
+    /// Resolve wl-copy executable path, checking PATH, Nix profiles, and Nix store.
+    pub fn find_wl_copy() -> Option<&'static str> {
+        static FOUND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+        *FOUND.get_or_init(|| {
+            let candidates = [
+                "wl-copy",
+                "/run/current-system/sw/bin/wl-copy",
+                "/etc/profiles/per-user/CheeseGuru/bin/wl-copy",
+                "/nix/var/nix/profiles/default/bin/wl-copy",
+                "/nix/store/5biz40pc9n1r463bqnky55vjp42bxg76-wl-clipboard-2.3.0/bin/wl-copy",
+            ];
+            for bin in candidates {
+                if let Ok(out) = Command::new(bin).arg("--version").output() {
+                    if out.status.success() {
+                        tracing::info!("Found working wl-copy at: {}", bin);
+                        return Some(bin);
+                    }
+                }
+            }
+            None
+        })
+    }
+
+    /// Copy bytes into a Wayland selection via `wl-copy`, piping over stdin
+    /// so arbitrarily long texts never hit command-line length limits.
+    /// No trim flags: wl-copy preserves exact bytes by default, and it
+    /// daemonizes itself to serve the selection.
+    fn wl_copy_to_selection(text: &str, primary: bool) -> bool {
+        let bin = match Self::find_wl_copy() {
+            Some(b) => b,
+            None => {
+                tracing::warn!("wl-copy not found; cannot seed clipboard");
+                return false;
+            }
+        };
+        let mut cmd = Command::new(bin);
+        if primary {
+            cmd.arg("--primary");
+        }
+        let mut child = match cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("failed to spawn wl-copy: {e:?}");
+                return false;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(text.as_bytes()).is_err()
+        {
+            tracing::warn!("failed to pipe text to wl-copy");
+            return false;
+        }
+        // Dropping stdin delivers EOF; wait for wl-copy to take over serving.
+        match child.wait() {
+            Ok(status) if status.success() => true,
+            _ => {
+                tracing::warn!("wl-copy exited unsuccessfully");
+                false
+            }
+        }
+    }
+
+    /// Seed BOTH Wayland selections so every app family can paste: the
+    /// regular CLIPBOARD (GTK/Qt/Ctrl+V) and PRIMARY (terminals' Shift+Insert).
+    /// Returns true if at least the CLIPBOARD seed succeeded.
+    pub fn seed_clipboard_both(text: &str) -> bool {
+        let clip = Self::wl_copy_to_selection(text, false);
+        if !Self::wl_copy_to_selection(text, true) {
+            tracing::warn!("wl-copy --primary failed; terminal Shift+Insert may miss");
+        }
+        clip
+    }
+
+    /// Query Hyprland for the focused window class via `.socket.sock`.
+    /// Uses the `j/activewindow` request (the `j/` prefix selects JSON
+    /// output; plain `activewindow` returns human-readable text). Falls back
+    /// to parsing `\tclass: ...` lines from the plain format. Returns the
+    /// lowercase class, or None when Hyprland is unreachable or nothing is
+    /// focused. Bounded by short socket timeouts so a hung compositor can't
+    /// stall input.
+    pub fn active_window_class() -> Option<String> {
+        let path = PathBuf::from(std::env::var("XDG_RUNTIME_DIR").ok()?)
+            .join("hypr")
+            .join(std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?)
+            .join(".socket.sock");
+        if !path.exists() {
+            return None;
+        }
+        let mut stream = std::os::unix::net::UnixStream::connect(&path).ok()?;
+        stream
+            .set_write_timeout(Some(Duration::from_millis(200)))
+            .ok()?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok()?;
+        stream.write_all(b"j/activewindow").ok()?;
+        // Read until a complete JSON object arrives, the peer closes, or the
+        // deadline passes; then parse whatever we got.
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let mut buf = Vec::with_capacity(4096);
+        let mut tmp = [0u8; 4096];
+        loop {
+            match stream.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    if buf.len() > 65536 {
+                        break;
+                    }
+                    if String::from_utf8_lossy(&buf).trim_end().ends_with('}') {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+        let reply = String::from_utf8_lossy(&buf);
+        // Primary: JSON `{"class": "...", ...}`.
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(reply.trim())
+            && let Some(class) = v.get("class").and_then(|c| c.as_str())
+        {
+            return Some(class.to_lowercase());
+        }
+        // Fallback: plain-text lines like `\tclass: com.mitchellh.ghostty`.
+        for line in reply.lines() {
+            if let Some(rest) = line.trim_start().strip_prefix("class:")
+                && let Some(class) = rest.trim().split_whitespace().next()
+                && !class.is_empty()
+            {
+                return Some(class.to_lowercase());
+            }
+        }
+        None
+    }
+
+    /// True for terminal emulators, where the clipboard paste shortcut is
+    /// Ctrl+Shift+V (ghostty/foot/kitty/alacritty/...). Plain Ctrl+V is
+    /// unreliable there (often swallowed or sent as raw ASCII), and
+    /// Shift+Insert hits PRIMARY instead of CLIPBOARD in several of them,
+    /// so terminals uniformly get Ctrl+Shift+V.
+    fn is_terminal_class(class: &str) -> bool {
+        const TERMS: &[&str] = &[
+            "ghostty",
+            "foot",
+            "footclient",
+            "kitty",
+            "alacritty",
+            "wezterm",
+            "gnome-terminal",
+            "gnome-terminal-server",
+            "konsole",
+            "xfce4-terminal",
+            "tilix",
+            "terminator",
+            "xterm",
+            "uxterm",
+            "rxvt",
+            "urxvt",
+            "st",
+            "sakura",
+            "hyper",
+            "tabby",
+            "warp",
+            "rio",
+        ];
+        TERMS.iter().any(|t| class.contains(t)) || class.contains("terminal")
+    }
+
+    /// Emit Shift+Insert: pastes the PRIMARY selection in ghostty/foot/
+    /// alacritty/xterm/gnome-terminal and the regular clipboard in standard
+    /// GTK/Qt text fields. Reuses the modifier-aware sender, so latched/held
+    /// mods compose and one-shot mods are consumed like a normal key tap.
+    pub fn send_shift_insert(&mut self) {
+        self.send_key_with_modifiers(KEY_INSERT, true);
+    }
+
+    /// Emit Ctrl+V: pastes the regular clipboard in GTK/Qt/Chromium/Firefox.
+    /// Engages Ctrl one-shot for this emission only; held mods survive.
+    pub fn send_ctrl_v(&mut self) {
+        if (self.pending_mods | self.held_mods) & Self::MOD_CTRL == 0 {
+            self.pending_mods |= Self::MOD_CTRL;
+        }
+        self.send_key_with_modifiers(KEY_V, false);
+    }
+
+    /// Emit Ctrl+Shift+V: clipboard paste in terminals (kitty leaves
+    /// Shift+Insert unbound; ghostty/foot use it for PRIMARY instead).
+    /// Same one-shot composition as Ctrl+V.
+    pub fn send_ctrl_shift_v(&mut self) {
+        if (self.pending_mods | self.held_mods) & Self::MOD_CTRL == 0 {
+            self.pending_mods |= Self::MOD_CTRL;
+        }
+        self.send_key_with_modifiers(KEY_V, true);
+    }
+
+    /// Instant, atomic clipboard paste — always a real clipboard paste, never
+    /// an IME `commit_string` (which apps like Ghostty replay line by line).
+    ///
+    /// Seeds BOTH selections via wl-copy (CLIPBOARD + PRIMARY), then fires
+    /// the paste shortcut matching the focused app: Ctrl+Shift+V for
+    /// terminals (Shift+Insert is unbound in kitty and hits PRIMARY, not
+    /// CLIPBOARD, in ghostty/foot/gnome-terminal), Ctrl+V for GUI apps and
+    /// browsers (CLIPBOARD). Falls back to char-by-char `send_text` only
+    /// when `wl-copy` is missing or fails.
+    pub fn paste_text_instant(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if Self::seed_clipboard_both(text) {
+            let class = Self::active_window_class().unwrap_or_default();
+            if Self::is_terminal_class(&class) {
+                self.send_ctrl_shift_v();
+            } else {
+                self.send_ctrl_v();
+            }
+            tracing::info!(
+                "paste_text_instant via clipboard ({} chars, class='{}')",
+                text.chars().count(),
+                class
+            );
+            return;
+        }
+        tracing::info!("paste_text_instant falling back to send_text");
+        self.send_text(text);
+    }
+
     /// Path to persistent clipboard history JSON file.
     pub fn clipboard_cache_path() -> Option<PathBuf> {
         let base = if let Ok(cache) = std::env::var("XDG_CACHE_HOME") {
@@ -1018,6 +1259,10 @@ impl WaylandState {
 
     pub fn switch_layer(&mut self, layer: LayerId, qh: &QueueHandle<Self>) {
         self.release_all_held_mods();
+        self.pressed_keys.clear();
+        self.pressed_key = None;
+        self.press_instant = None;
+        self.hold_preview = None;
         self.current_layer = layer;
         self.sync_layout_and_redraw(qh);
     }
@@ -1337,6 +1582,10 @@ impl WaylandState {
                 // A layer switch rebuilds all geometry: drop held modifiers
                 // first so no physical key or latch can get stuck.
                 self.release_all_held_mods();
+                self.pressed_keys.clear();
+                self.pressed_key = None;
+                self.press_instant = None;
+                self.hold_preview = None;
                 self.caps_lock = false;
                 self.current_layer = layer;
                 // Layer keys inside the clipboard view (e.g. the ABC bottom-row
@@ -1379,7 +1628,7 @@ impl WaylandState {
             KeyAction::Paste => {
                 tracing::info!("Paste requested");
                 if let Some(text) = Self::get_clipboard_text() {
-                    self.send_text(&text);
+                    self.paste_text_instant(&text);
                     self.push_clipboard(text);
                 }
             }
@@ -1388,8 +1637,14 @@ impl WaylandState {
             }
             KeyAction::ClipboardItem(idx) => {
                 if let Some(text) = self.clipboard_history.get(idx).cloned() {
-                    self.send_text(&text);
+                    self.paste_text_instant(&text);
                 }
+                self.clipboard_mode = false;
+                self.pressed_keys.clear();
+                self.pressed_key = None;
+                self.press_instant = None;
+                self.hold_preview = None;
+                self.current_layer = LayerId::Lower;
             }
             KeyAction::Ctrl => {
                 // Hold-tracked: tap converts to a one-shot latch on release.
@@ -2256,5 +2511,40 @@ pub fn char_to_keycode_and_shift(ch: char) -> Option<(u32, bool)> {
         '\t' => Some((KEY_TAB, false)),
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::WaylandState;
+
+    #[test]
+    fn test_is_terminal_class() {
+        // Known terminals (matched case-insensitively by caller convention;
+        // classes arrive lowercased from active_window_class).
+        for class in [
+            "com.mitchellh.ghostty",
+            "foot",
+            "footclient",
+            "kitty",
+            "alacritty",
+            "org.wezfurlong.wezterm",
+            "gnome-terminal-server",
+            "konsole",
+            "xterm",
+            "my-terminal-app",
+        ] {
+            assert!(
+                WaylandState::is_terminal_class(class),
+                "{class} should count as terminal"
+            );
+        }
+        // GUI apps, browsers, editors go the Ctrl+V route.
+        for class in ["firefox", "chromium", "code", "org.gnome.nautilus", ""] {
+            assert!(
+                !WaylandState::is_terminal_class(class),
+                "{class} should not count as terminal"
+            );
+        }
     }
 }

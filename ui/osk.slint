@@ -222,14 +222,14 @@ component KeyVisual {
         width: k.w - (k.is-pressed ? 4px : 0px);
         height: k.h - (k.is-pressed ? 4px : 0px);
         background: k.has-custom-bg
-            ? (k.is-pressed ? (k.has-custom-bg-pressed ? k.bg-color-pressed : OskTheme.key-bg-pressed) : k.bg-color)
+            ? (k.is-pressed ? (k.has-custom-bg-pressed ? k.bg-color-pressed : OskTheme.key-bg-pressed.darker(0.2)) : k.bg-color)
             : (k.key-type == KeyType.suggestion
-                ? (k.is-pressed ? OskTheme.suggest-bg-pressed : OskTheme.suggest-bg)
-                : (k.icon == 34 ? OskTheme.key-bg-pressed : (k.is-pressed ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent))));
-        border-color: k.has-custom-border
-            ? k.border-color
-            : (k.icon == 34 ? OskTheme.accent-color : (k.is-pressed ? OskTheme.border-color : transparent));
-        border-width: (k.icon == 34 || k.is-pressed) ? 1.5px : 0px;
+                ? (k.is-pressed ? OskTheme.suggest-bg-pressed.darker(0.2) : OskTheme.suggest-bg)
+                : (k.icon == 34 ? (k.is-pressed ? OskTheme.key-bg-pressed.darker(0.2) : OskTheme.key-bg-pressed) : (k.is-pressed ? OskTheme.key-bg-pressed.darker(0.2) : (k.has-border ? OskTheme.key-bg : transparent))));
+        border-color: k.icon == 34
+            ? (k.is-pressed ? OskTheme.accent-color.darker(0.25) : OskTheme.accent-color)
+            : transparent;
+        border-width: k.icon == 34 ? 1px : 0px;
         border-radius: k.key-type == KeyType.suggestion ? 8px : (k.key-type == KeyType.space ? OskTheme.space-radius : OskTheme.key-radius);
 
         Image {
