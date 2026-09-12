@@ -227,6 +227,43 @@ pub struct LayoutColors {
     pub preview_border_color: Option<String>,
 }
 
+impl LayoutColors {
+    /// Resolve every role to `#rrggbb[aa]` hex: raw `#...` values pass
+    /// through, M3 token names (e.g. "surface", "primary") look up `m3_map`,
+    /// and anything unresolvable becomes `None` so rendering falls back to
+    /// theme defaults (with a warn log naming the role).
+    pub fn resolved(&self, m3_map: &HashMap<String, String>) -> Self {
+        let r = |v: &Option<String>, role: &str| -> Option<String> {
+            let out = CustomLayoutFile::resolve_color(v.as_deref(), Some(m3_map));
+            if v.as_deref().is_some_and(|s| !s.trim().is_empty()) && out.is_none() {
+                tracing::warn!(
+                    "LayoutColors: ignoring unresolvable color for '{role}': '{}'",
+                    v.as_deref().unwrap_or("")
+                );
+            }
+            out
+        };
+        Self {
+            dock_bg: r(&self.dock_bg, "dock_bg"),
+            key_bg: r(&self.key_bg, "key_bg"),
+            key_bg_pressed: r(&self.key_bg_pressed, "key_bg_pressed"),
+            clipboard_bg: r(&self.clipboard_bg, "clipboard_bg"),
+            text_color: r(&self.text_color, "text_color"),
+            text_color_pressed: r(&self.text_color_pressed, "text_color_pressed"),
+            sub_color: r(&self.sub_color, "sub_color"),
+            icon_color: r(&self.icon_color, "icon_color"),
+            icon_color_pressed: r(&self.icon_color_pressed, "icon_color_pressed"),
+            accent_color: r(&self.accent_color, "accent_color"),
+            border_color: r(&self.border_color, "border_color"),
+            suggest_bg: r(&self.suggest_bg, "suggest_bg"),
+            suggest_bg_pressed: r(&self.suggest_bg_pressed, "suggest_bg_pressed"),
+            preview_bg_color: r(&self.preview_bg_color, "preview_bg_color"),
+            preview_text_color: r(&self.preview_text_color, "preview_text_color"),
+            preview_border_color: r(&self.preview_border_color, "preview_border_color"),
+        }
+    }
+}
+
 fn default_layout_name() -> String {
     "Custom Layout".to_string()
 }
@@ -692,7 +729,10 @@ impl CustomLayoutFile {
             preview_enabled: self.preview_enabled,
             preview_height: self.preview_height,
             preview_font_size: self.preview_font_size,
-            colors: self.colors.clone(),
+            colors: self
+                .colors
+                .as_ref()
+                .map(|c| c.resolved(&self.m3_map)),
         };
 
         // Always prepend the standard top action/suggestion bar
@@ -853,6 +893,33 @@ fn is_default_special(label: &str, action: &KeyAction) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_layout_colors_resolve_tokens() {
+        let mut map = HashMap::new();
+        map.insert("surface".to_string(), "#1e1e2e".to_string());
+        map.insert("primary".to_string(), "#89b4fa".to_string());
+        map.insert("on_surface".to_string(), "#ffffff".to_string());
+
+        let colors = LayoutColors {
+            dock_bg: Some("surface".to_string()),
+            accent_color: Some("primary".to_string()),
+            text_color: Some("on_surface".to_string()),
+            key_bg: Some("#2d2d2d".to_string()),
+            border_color: Some("not_a_color".to_string()),
+            ..Default::default()
+        };
+        let out = colors.resolved(&map);
+        // M3 tokens resolve to their mapped hex values.
+        assert_eq!(out.dock_bg.as_deref(), Some("#1e1e2e"));
+        assert_eq!(out.accent_color.as_deref(), Some("#89b4fa"));
+        assert_eq!(out.text_color.as_deref(), Some("#ffffff"));
+        // Raw hex passes through untouched.
+        assert_eq!(out.key_bg.as_deref(), Some("#2d2d2d"));
+        // Unknown tokens and absent roles become None (theme fallback).
+        assert_eq!(out.border_color, None);
+        assert_eq!(out.key_bg_pressed, None);
+    }
 
     #[test]
     fn test_parse_custom_json() {

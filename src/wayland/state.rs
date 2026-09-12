@@ -1052,7 +1052,10 @@ impl WaylandState {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
             let mut lay = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
             if let Some(ref custom) = self.custom_layout {
-                lay.colors = custom.colors.clone();
+                lay.colors = custom
+                    .colors
+                    .as_ref()
+                    .map(|c| c.resolved(&custom.m3_map));
                 lay.key_spacing = custom.key_spacing;
                 lay.row_spacing = custom.row_spacing;
                 lay.padding_x = custom.padding_x;
