@@ -131,6 +131,8 @@ pub struct Key {
     pub icon_color_pressed: Option<String>,
     /// Per-key custom border color
     pub border_color: Option<String>,
+    /// Optional opacity override for this key (e.g. 0.50)
+    pub opacity: Option<f32>,
 }
 
 impl Key {
@@ -161,6 +163,7 @@ impl Key {
             icon_color: None,
             icon_color_pressed: None,
             border_color: None,
+            opacity: None,
         }
     }
 
@@ -192,6 +195,7 @@ impl Key {
             icon_color: None,
             icon_color_pressed: None,
             border_color: None,
+            opacity: None,
         }
     }
 
@@ -222,6 +226,7 @@ impl Key {
             icon_color: None,
             icon_color_pressed: None,
             border_color: None,
+            opacity: None,
         }
     }
 

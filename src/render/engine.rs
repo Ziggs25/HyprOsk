@@ -479,7 +479,11 @@ impl RenderEngine {
                 };
 
                 if layout.blur.unwrap_or(false) && !is_active && (!is_suggestion_bar || key.is_special) {
-                    let key_alpha = (layout.key_opacity.unwrap_or(0.90) * 255.0).clamp(0.0, 255.0) as u8;
+                    let key_alpha = key
+                        .opacity
+                        .or(layout.key_opacity)
+                        .map(|ko| (ko * 255.0).clamp(0.0, 255.0) as u8)
+                        .unwrap_or(166);
                     key_bg.a = key_alpha;
                 }
 

@@ -64,26 +64,41 @@ pub struct KeyObject {
     #[serde(default)]
     pub width_px: Option<f32>,
     /// Per-key background color: raw `#rrggbb` or M3 token name (e.g. "primary")
-    #[serde(default)]
+    #[serde(default, alias = "bg", alias = "color")]
     pub bg_color: Option<String>,
     /// Per-key pressed background color
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "bg_pressed",
+        alias = "pressed_bg",
+        alias = "pressed_color",
+        alias = "color_pressed"
+    )]
     pub bg_color_pressed: Option<String>,
     /// Per-key label text color
-    #[serde(default)]
+    #[serde(default, alias = "label_color", alias = "fg_color")]
     pub text_color: Option<String>,
     /// Per-key pressed label text color
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "text_pressed",
+        alias = "pressed_text",
+        alias = "label_color_pressed",
+        alias = "fg_color_pressed"
+    )]
     pub text_color_pressed: Option<String>,
     /// Per-key icon color
-    #[serde(default)]
+    #[serde(default, alias = "icon_color_name")]
     pub icon_color: Option<String>,
     /// Per-key pressed icon color
-    #[serde(default)]
+    #[serde(default, alias = "icon_pressed", alias = "pressed_icon")]
     pub icon_color_pressed: Option<String>,
     /// Per-key border color
     #[serde(default)]
     pub border_color: Option<String>,
+    /// Optional opacity override for this key (e.g. 0.50)
+    #[serde(default)]
+    pub opacity: Option<f32>,
 }
 
 fn default_key_weight() -> f32 {
@@ -294,10 +309,11 @@ impl CustomLayoutFile {
         let on_surface_variant = get_color("on_surface_variant");
         let primary = get_color("primary");
         let outline = get_color("outline");
+        let outline_variant = get_color("outline_variant");
 
         Some(LayoutColors {
             dock_bg: surface.clone(),
-            key_bg: surface_container,
+            key_bg: outline_variant.clone().or_else(|| surface_container),
             key_bg_pressed: surface_container_high,
             clipboard_bg: get_color("surface_container_lowest").or(surface),
             text_color: on_surface.clone(),
@@ -503,20 +519,20 @@ impl CustomLayoutFile {
     /// When matugen is enabled, Material 3 dynamic colors take precedence.
     pub fn apply_matugen_colors(&mut self, m3: LayoutColors) {
         if let Some(existing) = &mut self.colors {
-            if let Some(c) = m3.dock_bg { existing.dock_bg = Some(c); }
-            if let Some(c) = m3.key_bg { existing.key_bg = Some(c); }
-            if let Some(c) = m3.key_bg_pressed { existing.key_bg_pressed = Some(c); }
-            if let Some(c) = m3.clipboard_bg { existing.clipboard_bg = Some(c); }
-            if let Some(c) = m3.text_color { existing.text_color = Some(c); }
-            if let Some(c) = m3.text_color_pressed { existing.text_color_pressed = Some(c); }
-            if let Some(c) = m3.sub_color { existing.sub_color = Some(c); }
-            if let Some(c) = m3.icon_color { existing.icon_color = Some(c); }
-            if let Some(c) = m3.icon_color_pressed { existing.icon_color_pressed = Some(c); }
-            if let Some(c) = m3.accent_color { existing.accent_color = Some(c); }
-            if let Some(c) = m3.border_color { existing.border_color = Some(c); }
-            if let Some(c) = m3.preview_bg_color { existing.preview_bg_color = Some(c); }
-            if let Some(c) = m3.preview_text_color { existing.preview_text_color = Some(c); }
-            if let Some(c) = m3.preview_border_color { existing.preview_border_color = Some(c); }
+            if existing.dock_bg.is_none() { if let Some(c) = m3.dock_bg { existing.dock_bg = Some(c); } }
+            if existing.key_bg.is_none() { if let Some(c) = m3.key_bg { existing.key_bg = Some(c); } }
+            if existing.key_bg_pressed.is_none() { if let Some(c) = m3.key_bg_pressed { existing.key_bg_pressed = Some(c); } }
+            if existing.clipboard_bg.is_none() { if let Some(c) = m3.clipboard_bg { existing.clipboard_bg = Some(c); } }
+            if existing.text_color.is_none() { if let Some(c) = m3.text_color { existing.text_color = Some(c); } }
+            if existing.text_color_pressed.is_none() { if let Some(c) = m3.text_color_pressed { existing.text_color_pressed = Some(c); } }
+            if existing.sub_color.is_none() { if let Some(c) = m3.sub_color { existing.sub_color = Some(c); } }
+            if existing.icon_color.is_none() { if let Some(c) = m3.icon_color { existing.icon_color = Some(c); } }
+            if existing.icon_color_pressed.is_none() { if let Some(c) = m3.icon_color_pressed { existing.icon_color_pressed = Some(c); } }
+            if existing.accent_color.is_none() { if let Some(c) = m3.accent_color { existing.accent_color = Some(c); } }
+            if existing.border_color.is_none() { if let Some(c) = m3.border_color { existing.border_color = Some(c); } }
+            if existing.preview_bg_color.is_none() { if let Some(c) = m3.preview_bg_color { existing.preview_bg_color = Some(c); } }
+            if existing.preview_text_color.is_none() { if let Some(c) = m3.preview_text_color { existing.preview_text_color = Some(c); } }
+            if existing.preview_border_color.is_none() { if let Some(c) = m3.preview_border_color { existing.preview_border_color = Some(c); } }
         } else {
             self.colors = Some(m3);
         }
@@ -799,6 +815,7 @@ fn convert_key_def(
                 CustomLayoutFile::resolve_color(obj.icon_color_pressed.as_deref(), m3_map);
             key.border_color =
                 CustomLayoutFile::resolve_color(obj.border_color.as_deref(), m3_map);
+            key.opacity = obj.opacity;
             key
         }
     }
@@ -1094,12 +1111,42 @@ mod tests {
         assert_eq!(r3.keys[0].label, "⇧");
         assert_eq!(r3.keys[8].label, "⇧");
 
-        // Row 4: &123, Ctrl, ⊞, Alt, Space, 🎤, ◀, ▶ (8 keys)
+        // Row 4: &123, Ctrl, ⊞, Space, Alt, ◀, ▶ (7 keys)
         let r4 = &k_layout.rows[4];
-        assert_eq!(r4.keys.len(), 8);
+        assert_eq!(r4.keys.len(), 7);
         assert_eq!(r4.keys[0].label, "&123");
-        assert_eq!(r4.keys[4].label, "Space");
-        assert_eq!(r4.keys[4].action, KeyAction::Space);
-        assert!((r4.keys[4].width_weight - 7.2).abs() < 0.01);
+        assert_eq!(r4.keys[3].label, "Space");
+        assert_eq!(r4.keys[3].action, KeyAction::Space);
+        assert!((r4.keys[3].width_weight - 8.3).abs() < 0.01);
+        assert_eq!(r4.keys[4].label, "Alt");
+        assert_eq!(r4.keys[4].action, KeyAction::Alt);
+    }
+
+    #[test]
+    fn test_per_key_pressed_color_parsing() {
+        let json_str = r##"{
+            "name": "Test Pressed Colors",
+            "layers": {
+                "lower": [
+                    [
+                        {"key": "a", "bg": "#112233", "bg_pressed": "#445566", "text_color": "#ffffff", "text_pressed": "#ff0000"},
+                        {"key": "b", "pressed_bg": "#123456", "pressed_text": "#654321", "pressed_icon": "#aabbcc"}
+                    ]
+                ]
+            }
+        }"##;
+
+        let parsed: CustomLayoutFile = serde_json::from_str(json_str).expect("parse json");
+        let k_layout = parsed.to_keyboard_layout(LayerId::Lower, &[], false);
+        let ka = &k_layout.rows[1].keys[0];
+        assert_eq!(ka.bg_color.as_deref(), Some("#112233"));
+        assert_eq!(ka.bg_color_pressed.as_deref(), Some("#445566"));
+        assert_eq!(ka.text_color.as_deref(), Some("#ffffff"));
+        assert_eq!(ka.text_color_pressed.as_deref(), Some("#ff0000"));
+
+        let kb = &k_layout.rows[1].keys[1];
+        assert_eq!(kb.bg_color_pressed.as_deref(), Some("#123456"));
+        assert_eq!(kb.text_color_pressed.as_deref(), Some("#654321"));
+        assert_eq!(kb.icon_color_pressed.as_deref(), Some("#aabbcc"));
     }
 }

@@ -221,11 +221,19 @@ component KeyVisual {
         y: k.is-pressed ? 2px : 0px;
         width: k.w - (k.is-pressed ? 4px : 0px);
         height: k.h - (k.is-pressed ? 4px : 0px);
-        background: k.has-custom-bg
-            ? (k.is-pressed ? (k.has-custom-bg-pressed ? k.bg-color-pressed : OskTheme.key-bg-pressed.darker(0.2)) : k.bg-color)
-            : (k.key-type == KeyType.suggestion
-                ? (k.is-pressed ? OskTheme.suggest-bg-pressed.darker(0.2) : OskTheme.suggest-bg)
-                : (k.icon == 34 ? (k.is-pressed ? OskTheme.key-bg-pressed.darker(0.2) : OskTheme.key-bg-pressed) : (k.is-pressed ? OskTheme.key-bg-pressed.darker(0.2) : (k.has-border ? OskTheme.key-bg : transparent))));
+        background: k.is-pressed
+            ? (k.has-custom-bg-pressed
+                ? k.bg-color-pressed
+                : (k.has-custom-bg
+                    ? k.bg-color.darker(0.2)
+                    : (k.key-type == KeyType.suggestion
+                        ? OskTheme.suggest-bg-pressed.darker(0.2)
+                        : OskTheme.key-bg-pressed.darker(0.2))))
+            : (k.has-custom-bg
+                ? k.bg-color
+                : (k.key-type == KeyType.suggestion
+                    ? OskTheme.suggest-bg
+                    : (k.icon == 34 ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent))));
         border-color: k.icon == 34
             ? (k.is-pressed ? OskTheme.accent-color.darker(0.25) : OskTheme.accent-color)
             : transparent;
@@ -239,9 +247,15 @@ component KeyVisual {
             width: OskTheme.icon-size;
             height: OskTheme.icon-size;
             source: OskIcons.get(k.icon);
-            colorize: k.has-custom-icon
-                ? (k.is-pressed ? (k.has-custom-icon-pressed ? k.icon-color-pressed : OskTheme.icon-color-pressed) : k.icon-color)
-                : ((k.icon == 34 || k.is-pressed) ? OskTheme.icon-color-pressed : OskTheme.icon-color);
+            colorize: k.is-pressed
+                ? (k.has-custom-icon-pressed
+                    ? k.icon-color-pressed
+                    : (k.has-custom-icon
+                        ? k.icon-color
+                        : OskTheme.icon-color-pressed))
+                : (k.has-custom-icon
+                    ? k.icon-color
+                    : ((k.icon == 34) ? OskTheme.icon-color-pressed : OskTheme.icon-color));
             image-fit: contain;
         }
         Text {
@@ -251,9 +265,15 @@ component KeyVisual {
             font-family: "DejaVu Sans";
             font-size: k.is-functional ? OskTheme.functional-size : OskTheme.label-size;
             font-weight: 500;
-            color: k.has-custom-text
-                ? (k.is-pressed ? (k.has-custom-text-pressed ? k.text-color-pressed : OskTheme.text-color-pressed) : k.text-color)
-                : (k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color);
+            color: k.is-pressed
+                ? (k.has-custom-text-pressed
+                    ? k.text-color-pressed
+                    : (k.has-custom-text
+                        ? k.text-color
+                        : OskTheme.text-color-pressed))
+                : (k.has-custom-text
+                    ? k.text-color
+                    : OskTheme.text-color);
             horizontal-alignment: center;
             vertical-alignment: center;
         }

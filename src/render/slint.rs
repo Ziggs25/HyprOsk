@@ -41,11 +41,16 @@ fn parse_slint_color(hex_opt: Option<&String>, fallback: slint::Color, alpha_ove
 
 /// Parse an optional per-key `#rrggbb[aa]` color (already resolved from raw
 /// hex or an M3 token name at layout load). Returns `(has_custom, color)`.
-fn per_key_color(opt: &Option<String>) -> (bool, slint::Color) {
+fn per_key_color(opt: &Option<String>, alpha_override: Option<u8>) -> (bool, slint::Color) {
     match opt {
         Some(s) if !s.trim().is_empty() => {
             let c = ThemeColor::parse_hex(s);
-            (true, slint::Color::from_argb_u8(c.a, c.r, c.g, c.b))
+            let a = if let Some(ao) = alpha_override {
+                if c.a == 255 { ao } else { c.a }
+            } else {
+                c.a
+            };
+            (true, slint::Color::from_argb_u8(a, c.r, c.g, c.b))
         }
         _ => (false, slint::Color::from_argb_u8(0, 0, 0, 0)),
     }
@@ -363,7 +368,7 @@ impl SlintScene {
 
             let (default_dock_bg, default_clipboard_bg, default_key_bg, default_key_bg_pressed) = if blur_enabled {
                 let dock_alpha = (layout.opacity.unwrap_or(0.60) * 255.0).clamp(0.0, 255.0) as u8;
-                let key_alpha = (layout.key_opacity.unwrap_or(0.90) * 255.0).clamp(0.0, 255.0) as u8;
+                let key_alpha = (layout.key_opacity.unwrap_or(0.65) * 255.0).clamp(0.0, 255.0) as u8;
                 (
                     slint::Color::from_argb_u8(dock_alpha, theme.background.r, theme.background.g, theme.background.b),
                     slint::Color::from_argb_u8(
@@ -387,10 +392,13 @@ impl SlintScene {
             let (dock_alpha_opt, key_alpha_opt) = if blur_enabled {
                 (
                     Some((layout.opacity.unwrap_or(0.60) * 255.0).clamp(0.0, 255.0) as u8),
-                    Some((layout.key_opacity.unwrap_or(0.90) * 255.0).clamp(0.0, 255.0) as u8),
+                    Some((layout.key_opacity.unwrap_or(0.65) * 255.0).clamp(0.0, 255.0) as u8),
                 )
             } else {
-                (None, None)
+                (
+                    None,
+                    layout.key_opacity.map(|ko| (ko * 255.0).clamp(0.0, 255.0) as u8),
+                )
             };
 
             osk_theme.set_dock_bg(parse_slint_color(colors.and_then(|c| c.dock_bg.as_ref()), default_dock_bg, dock_alpha_opt));
@@ -461,16 +469,23 @@ impl SlintScene {
 
                     let has_border = key.borders.or(layout.borders).unwrap_or(true);
 
-                    let (has_custom_bg, bg_color) = per_key_color(&key.bg_color);
-                    let (has_custom_bg_pressed, bg_color_pressed) =
-                        per_key_color(&key.bg_color_pressed);
-                    let (has_custom_text, text_color) = per_key_color(&key.text_color);
+                    let effective_key_alpha = key
+                        .opacity
+                        .map(|o| (o * 255.0).clamp(0.0, 255.0) as u8);
+
+                    let (has_custom_bg, bg_color) =
+                        per_key_color(&key.bg_color, effective_key_alpha);
+                    let (has_custom_bg_pressed, bg_color_pressed) = per_key_color(
+                        &key.bg_color_pressed,
+                        effective_key_alpha.or(if key.bg_color.is_none() { key_alpha_opt } else { None }),
+                    );
+                    let (has_custom_text, text_color) = per_key_color(&key.text_color, None);
                     let (has_custom_text_pressed, text_color_pressed) =
-                        per_key_color(&key.text_color_pressed);
-                    let (has_custom_icon, icon_color) = per_key_color(&key.icon_color);
+                        per_key_color(&key.text_color_pressed, None);
+                    let (has_custom_icon, icon_color) = per_key_color(&key.icon_color, None);
                     let (has_custom_icon_pressed, icon_color_pressed) =
-                        per_key_color(&key.icon_color_pressed);
-                    let (has_custom_border, border_color) = per_key_color(&key.border_color);
+                        per_key_color(&key.icon_color_pressed, None);
+                    let (has_custom_border, border_color) = per_key_color(&key.border_color, None);
 
                     keys.push(Key {
                         x: rect.x,

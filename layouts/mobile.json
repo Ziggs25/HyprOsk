@@ -2,8 +2,8 @@
   "name": "Mobile Layout",
   "mode": "mobile",
   "blur": true,
-  "opacity": 0.90,
-  "key_opacity": 0.90,
+  "opacity": 0.62,
+  "key_opacity": 0.28,
   "width": 392,
   "height": 350,
   "margin_bottom": 16,
@@ -16,6 +16,12 @@
   "matugen_type": "scheme-vibrant",
   "matugen_prefer": "saturation",
   "font_size": 2.0,
+  "colors": {
+    "dock_bg": "surface",
+    "key_bg": "outline_variant",
+    "text_color": "#ffffff",
+    "icon_color": "#ffffff"
+  },
   "layers": {
     "lower": [
       [
@@ -42,7 +48,7 @@
         {"key": "l", "sub": ")"}
       ],
       [
-        {"key": "⇧", "action": "shift", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "⇧", "action": "shift", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         {"key": "z", "sub": "*"},
         {"key": "x", "sub": "\""},
         {"key": "c", "sub": "'"},
@@ -50,14 +56,14 @@
         {"key": "b", "sub": ";"},
         {"key": "n", "sub": "!"},
         {"key": "m", "sub": "?"},
-        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ],
       [
-        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ]
     ],
     "upper": [
@@ -85,7 +91,7 @@
         {"key": "L", "sub": ")"}
       ],
       [
-        {"key": "⇧", "action": "shift", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "⇧", "action": "shift", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         {"key": "Z", "sub": "*"},
         {"key": "X", "sub": "\""},
         {"key": "C", "sub": "'"},
@@ -93,14 +99,14 @@
         {"key": "B", "sub": ";"},
         {"key": "N", "sub": "!"},
         {"key": "M", "sub": "?"},
-        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ],
       [
-        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ]
     ],
     "symbols": [
@@ -111,16 +117,16 @@
         "@", "#", "$", "%", "&", "-", "+", "(", ")", "/"
       ],
       [
-        {"key": "=\\<", "action": "symbols2", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "=\\<", "action": "symbols2", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         "*", "\"", "'", ":", ";", "!", "?",
-        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ],
       [
-        {"key": "ABC", "action": "lower", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "ABC", "action": "lower", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ]
     ],
     "symbols2": [
@@ -131,16 +137,16 @@
         "£", "¢", "€", "¥", "^", "°", "=", "{", "}", "\\"
       ],
       [
-        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "?123", "action": "symbols", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         "%", "_", ">", "<", "[", "]", "§",
-        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⌫", "action": "backspace", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ],
       [
-        {"key": "ABC", "action": "lower", "width": 1.35, "bg_color": "surface_container_high"},
+        {"key": "ABC", "action": "lower", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"},
         {"key": ",", "width": 1.0},
         {"key": "Space", "action": "space", "width": 4.9},
         {"key": ".", "width": 1.0},
-        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "surface_container_high"}
+        {"key": "⏎", "action": "enter", "width": 1.35, "bg_color": "primary", "text_color": "on_primary", "icon_color": "on_primary"}
       ]
     ]
   }
