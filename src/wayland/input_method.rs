@@ -15,6 +15,7 @@ pub struct InputMethodState {
     pub cursor_pos: u32,
     pub content_hint: u32,
     pub content_purpose: u32,
+    pub last_content_purpose: Option<u32>,
 }
 
 impl Dispatch<ZwpInputMethodManagerV2, ()> for WaylandState {
@@ -42,6 +43,10 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
             zwp_input_method_v2::Event::Activate => {
                 tracing::info!("Received text-input Activate event -> Auto-showing HyprOsk");
                 state.im_state.is_active.store(true, Ordering::SeqCst);
+                state.im_state.last_content_purpose = None;
+                state.im_state.surrounding_text = None;
+                state.im_state.cursor_pos = 0;
+                state.suggest_engine.clear();
                 if state.config.behavior.auto_show && state.allow_auto_show() {
                     state.show_keyboard(qh);
                     // If triggered by auto-show, allow auto-hide on blur
@@ -51,19 +56,33 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
             zwp_input_method_v2::Event::Deactivate => {
                 tracing::info!("Received text-input Deactivate event (manually_shown={})", state.manually_shown);
                 state.im_state.is_active.store(false, Ordering::SeqCst);
+                state.im_state.last_content_purpose = None;
+                state.suggest_engine.clear();
                 if state.config.behavior.auto_hide && !state.manually_shown {
                     state.hide_keyboard(qh);
                 }
             }
-            zwp_input_method_v2::Event::SurroundingText { text, cursor, anchor: _ } => {
+            zwp_input_method_v2::Event::SurroundingText { text, cursor, anchor } => {
+                let effective_cursor = cursor.max(anchor);
                 state.im_state.surrounding_text = Some(text.clone());
-                state.im_state.cursor_pos = cursor;
-                state.sync_suggest_with_surrounding(&text, cursor, qh);
+                state.im_state.cursor_pos = effective_cursor;
+                // Only sync when the field was cleared or no word is actively
+                // being typed. While typing (current_word non-empty) Chromium
+                // emits lagging SurroundingText echoes (e.g. stale 'b' arriving
+                // after 'r' was typed for 'br'); syncing those would clobber
+                // current_word back to the stale prefix and cause 'bbro' on
+                // replacement. Skipping preserves the typed word; see
+                // SuggestEngine::sync_with_text stale-prefix guards.
+                if text.is_empty() || state.suggest_engine.current_word.is_empty() {
+                    state.sync_suggest_with_surrounding(&text, effective_cursor, qh);
+                }
             }
             zwp_input_method_v2::Event::ContentType { hint, purpose } => {
-                state.im_state.content_hint = hint.into();
-                state.im_state.content_purpose = purpose.into();
-                state.adapt_layout_for_content_purpose(purpose.into(), qh);
+                let p: u32 = purpose.into();
+                let h: u32 = hint.into();
+                state.im_state.content_hint = h;
+                state.im_state.content_purpose = p;
+                state.adapt_layout_for_content_purpose(p, qh);
             }
             zwp_input_method_v2::Event::Done => {
                 // Batch updates finished

@@ -107,6 +107,11 @@ impl SuggestEngine {
         let valid_len = surrounding.floor_char_boundary(surrounding.len().min(cursor_bytes));
         let before = &surrounding[..valid_len];
         if before.is_empty() {
+            // Lagging echo from before the word started (e.g. empty/cleared
+            // event arriving after typing began): preserve the active word.
+            if !self.current_word.is_empty() {
+                return;
+            }
             self.clear();
             return;
         }
@@ -118,6 +123,9 @@ impl SuggestEngine {
             .collect();
 
         if before.ends_with(' ') {
+            if !self.current_word.is_empty() {
+                return;
+            }
             self.word_history = words;
             self.current_word.clear();
             if let Some(last_word) = self.word_history.last().cloned() {
@@ -126,7 +134,22 @@ impl SuggestEngine {
             } else {
                 self.clear();
             }
+        } else if before.chars().last().is_some_and(|c| !c.is_alphabetic() && c != '\'') {
+            // Cursor is directly after punctuation or symbol (e.g. '.', '/', ':')
+            self.word_history = words;
+            self.current_word.clear();
+            self.clear();
         } else if let Some(last_word) = words.last().cloned() {
+            // Lagging prefix echo: Chromium may deliver stale surrounding text
+            // (e.g. 'b' arriving after 'r' was typed for 'br'). If the
+            // surrounding word is a strict prefix of the actively typed word,
+            // it is stale — return without clobbering current_word.
+            if !self.current_word.is_empty()
+                && last_word.len() < self.current_word.len()
+                && self.current_word.starts_with(&last_word)
+            {
+                return;
+            }
             self.word_history = words[..words.len() - 1].to_vec();
             self.current_word = last_word;
             self.is_next_word_mode = false;
@@ -508,5 +531,67 @@ mod tests {
         // Immediately backspace -> undo reverts the transient word!
         engine.pop_char();
         assert_eq!(engine.dictionary.user_dict.words.len(), 0);
+    }
+
+    #[test]
+    fn test_sync_with_text_url_boundaries() {
+        let mut engine = SuggestEngine::new_empty();
+
+        // 1. Surrounding text ends with dot: "google."
+        engine.sync_with_text("google.", 7);
+        assert_eq!(engine.current_word, "");
+        assert!(engine.candidates.is_empty());
+
+        // 2. Typing next letter "c" after dot -> "google.c"
+        engine.sync_with_text("google.c", 8);
+        assert_eq!(engine.current_word, "c");
+
+        // 3. Complete URL "google.com/"
+        engine.sync_with_text("google.com/", 11);
+        assert_eq!(engine.current_word, "");
+        assert!(engine.candidates.is_empty());
+    }
+
+    #[test]
+    fn test_sync_ignores_stale_lagging_echo() {
+        let mut engine = SuggestEngine::new_empty();
+        // Type 'b' then 'r' -> current_word is 'br'.
+        engine.push_char('b');
+        engine.push_char('r');
+        assert_eq!(engine.current_word, "br");
+
+        // Stale Chromium echo for just 'b' arrives AFTER 'r' was typed.
+        // 'b' is a strict prefix of 'br', so it must be ignored.
+        engine.sync_with_text("b", 1);
+        assert_eq!(
+            engine.current_word, "br",
+            "lagging prefix echo must not clobber current_word"
+        );
+
+        // Lagging empty echo from before the word started must not clear.
+        engine.sync_with_text("", 0);
+        assert_eq!(
+            engine.current_word, "br",
+            "lagging empty echo must not clear current_word"
+        );
+
+        // Lagging space echo from before the word started must not clear.
+        engine.sync_with_text("hello ", 6);
+        assert_eq!(
+            engine.current_word, "br",
+            "lagging space echo must not clear current_word"
+        );
+
+        // Fresh echo for the full word is accepted.
+        engine.sync_with_text("br", 2);
+        assert_eq!(engine.current_word, "br");
+
+        // Forward progress to a longer word is accepted.
+        engine.sync_with_text("bro", 3);
+        assert_eq!(engine.current_word, "bro");
+
+        // Unrelated word (cursor move / external edit) still syncs.
+        engine.sync_with_text("xyz", 3);
+        assert_eq!(engine.current_word, "xyz");
     }
 }

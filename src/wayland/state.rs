@@ -1326,8 +1326,25 @@ impl WaylandState {
     }
 
     pub fn adapt_layout_for_content_purpose(&mut self, purpose: u32, qh: &QueueHandle<Self>) {
-        if (2..=5).contains(&purpose) {
-            self.switch_layer(LayerId::Symbols, qh);
+        if self.im_state.last_content_purpose == Some(purpose) {
+            return;
+        }
+        self.im_state.last_content_purpose = Some(purpose);
+
+        // Wayland zwp_text_input_v3 content_purpose values:
+        // 0: normal, 1: alpha, 2: digits, 3: number, 4: phone, 5: url, 6: email,
+        // 7: name, 8: password, 9: pin, 10: date, 11: time, 12: datetime, 13: terminal
+        // Only numeric input modes should auto-open on the Symbols layer.
+        let is_numeric = matches!(purpose, 2 | 3 | 4 | 9);
+        if is_numeric {
+            if self.current_layer != LayerId::Symbols && self.current_layer != LayerId::Symbols2 {
+                self.switch_layer(LayerId::Symbols, qh);
+            }
+        } else if (self.current_layer == LayerId::Symbols || self.current_layer == LayerId::Symbols2)
+            && matches!(purpose, 0 | 1 | 5 | 6 | 7 | 8 | 13)
+        {
+            // Textual fields (normal, alpha, url, email, etc.) default back to Lower
+            self.switch_layer(LayerId::Lower, qh);
         }
     }
 
@@ -1514,39 +1531,33 @@ impl WaylandState {
                         self.suggest_engine.on_word_selected(&chosen_word);
                         self.send_text(" ");
                     } else {
-                        let is_im = self.im_state.is_active.load(Ordering::SeqCst);
-                        let use_im_delete = is_im
-                            && self.input_method.is_some()
-                            && self
-                                .im_state
-                                .surrounding_text
-                                .as_ref()
-                                .is_some_and(|t| {
-                                    let before = &t[..self.im_state.cursor_pos.min(t.len() as u32) as usize];
-                                    before.ends_with(&cur)
-                                });
-                        tracing::info!("suggest use_im_delete={} before_len={} cur_len_chars={}", use_im_delete, cur.len(), cur.chars().count());
-                        if use_im_delete {
-                            let before = cur.len() as u32;
-                            if let Some(ref im) = self.input_method {
-                                tracing::info!("suggest im delete {} bytes", before);
-                                im.delete_surrounding_text(before, 0);
-                                im.commit(self.im_state.serial);
-                                self.im_state.serial = self.im_state.serial.wrapping_add(1);
-                            }
-                            self.suggest_engine.on_word_selected(&chosen_word);
-                            tracing::info!("suggest send_text '{} ' via im", chosen_word);
-                            self.send_text(&format!("{} ", chosen_word));
-                        } else {
-                            let n = cur.chars().count();
-                            tracing::info!("suggest backspace loop n={}", n);
-                            for _ in 0..n {
-                                self.send_backspace();
-                            }
-                            self.suggest_engine.on_word_selected(&chosen_word);
-                            tracing::info!("suggest send_text '{} ' via vk", chosen_word);
-                            self.send_text(&format!("{} ", chosen_word));
+                        // Unified virtual-keyboard replacement: Chromium/Ozone Wayland drops
+                        // zwp_input_method_v2::delete_surrounding_text, and mixing VK
+                        // backspaces with im.commit_string races across protocols
+                        // (leftover chars / 'bbro'). Keeping deletes + inserts on the
+                        // single VK event stream guarantees FIFO ordering.
+                        let replacement = format!("{} ", chosen_word);
+                        let n = cur.chars().count();
+                        tracing::info!("suggest vk replace: delete {} chars, insert '{}'", n, replacement);
+                        for _ in 0..n {
+                            self.send_backspace();
                         }
+                        for ch in replacement.chars() {
+                            if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
+                                self.send_key_with_modifiers(keycode, shift);
+                            } else {
+                                self.send_text(&ch.to_string());
+                            }
+                        }
+                        if let Some(ref mut t) = self.im_state.surrounding_text {
+                            let pos = (self.im_state.cursor_pos as usize).min(t.len());
+                            let before_pos = pos.saturating_sub(cur.len());
+                            if t[..pos].ends_with(&cur) {
+                                t.replace_range(before_pos..pos, &replacement);
+                                self.im_state.cursor_pos = (before_pos + replacement.len()) as u32;
+                            }
+                        }
+                        self.suggest_engine.on_word_selected(&chosen_word);
                     }
                 }
             }
@@ -1704,7 +1715,18 @@ impl WaylandState {
     }
 
     pub fn sync_suggest_with_surrounding(&mut self, text: &str, cursor: u32, qh: &QueueHandle<Self>) {
+        tracing::info!(
+            "sync_suggest surrounding='{}' cursor={} current='{}' before sync",
+            text,
+            cursor,
+            self.suggest_engine.current_word
+        );
         self.suggest_engine.sync_with_text(text, cursor as usize);
+        tracing::info!(
+            "sync_suggest after current='{}' candidates={:?}",
+            self.suggest_engine.current_word,
+            self.suggest_engine.candidates
+        );
         self.sync_layout_and_redraw(qh);
     }
 
