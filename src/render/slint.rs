@@ -418,8 +418,8 @@ impl SlintScene {
             osk_theme.set_icon_color_pressed(parse_slint_color(colors.and_then(|c| c.icon_color_pressed.as_ref()), default_accent_color, None));
             osk_theme.set_accent_color(parse_slint_color(colors.and_then(|c| c.accent_color.as_ref()), default_accent_color, None));
             osk_theme.set_border_color(parse_slint_color(colors.and_then(|c| c.border_color.as_ref()), default_border_color, None));
-            osk_theme.set_suggest_bg(parse_slint_color(colors.and_then(|c| c.suggest_bg.as_ref()), slint::Color::from_argb_u8(13, 255, 255, 255), None));
-            osk_theme.set_suggest_bg_pressed(parse_slint_color(colors.and_then(|c| c.suggest_bg_pressed.as_ref()), slint::Color::from_argb_u8(46, 255, 255, 255), None));
+            osk_theme.set_suggest_bg(parse_slint_color(colors.and_then(|c| c.suggest_bg.as_ref()), slint::Color::from_argb_u8(13, 255, 255, 255), key_alpha_opt));
+            osk_theme.set_suggest_bg_pressed(parse_slint_color(colors.and_then(|c| c.suggest_bg_pressed.as_ref()), slint::Color::from_argb_u8(46, 255, 255, 255), key_alpha_opt));
             osk_theme.set_preview_bg(parse_slint_color(colors.and_then(|c| c.preview_bg_color.as_ref()), slint::Color::from_argb_u8(255, 45, 45, 45), None));
             osk_theme.set_preview_text(parse_slint_color(colors.and_then(|c| c.preview_text_color.as_ref()), slint::Color::from_argb_u8(255, 255, 255, 255), None));
             osk_theme.set_preview_border(parse_slint_color(colors.and_then(|c| c.preview_border_color.as_ref()), slint::Color::from_argb_u8(255, 68, 68, 68), None));

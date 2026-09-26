@@ -530,6 +530,8 @@ impl CustomLayoutFile {
             if existing.icon_color_pressed.is_none() { if let Some(c) = m3.icon_color_pressed { existing.icon_color_pressed = Some(c); } }
             if existing.accent_color.is_none() { if let Some(c) = m3.accent_color { existing.accent_color = Some(c); } }
             if existing.border_color.is_none() { if let Some(c) = m3.border_color { existing.border_color = Some(c); } }
+            if existing.suggest_bg.is_none() { if let Some(c) = m3.suggest_bg { existing.suggest_bg = Some(c); } }
+            if existing.suggest_bg_pressed.is_none() { if let Some(c) = m3.suggest_bg_pressed { existing.suggest_bg_pressed = Some(c); } }
             if existing.preview_bg_color.is_none() { if let Some(c) = m3.preview_bg_color { existing.preview_bg_color = Some(c); } }
             if existing.preview_text_color.is_none() { if let Some(c) = m3.preview_text_color { existing.preview_text_color = Some(c); } }
             if existing.preview_border_color.is_none() { if let Some(c) = m3.preview_border_color { existing.preview_border_color = Some(c); } }

@@ -234,10 +234,8 @@ component KeyVisual {
                 : (k.key-type == KeyType.suggestion
                     ? OskTheme.suggest-bg
                     : (k.icon == 34 ? OskTheme.key-bg-pressed : (k.has-border ? OskTheme.key-bg : transparent))));
-        border-color: k.icon == 34
-            ? (k.is-pressed ? OskTheme.accent-color.darker(0.25) : OskTheme.accent-color)
-            : transparent;
-        border-width: k.icon == 34 ? 1px : 0px;
+        border-color: k.has-custom-border ? k.border-color : transparent;
+        border-width: k.has-custom-border ? 1px : 0px;
         border-radius: k.key-type == KeyType.suggestion ? 8px : (k.key-type == KeyType.space ? OskTheme.space-radius : OskTheme.key-radius);
 
         Image {

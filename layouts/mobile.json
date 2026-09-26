@@ -5,7 +5,7 @@
   "opacity": 0.62,
   "key_opacity": 0.28,
   "width": 392,
-  "height": 350,
+  "height": 400,
   "margin_bottom": 16,
   "key_spacing": 6.0,
   "row_spacing": 10.0,
@@ -19,6 +19,8 @@
   "colors": {
     "dock_bg": "surface",
     "key_bg": "outline_variant",
+    "suggest_bg": "outline_variant",
+    "suggest_bg_pressed": "primary",
     "text_color": "#ffffff",
     "icon_color": "#ffffff"
   },
