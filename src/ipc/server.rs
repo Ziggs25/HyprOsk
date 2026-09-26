@@ -1,6 +1,6 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
 
@@ -47,18 +47,16 @@ impl IpcServer {
         Ok(String::from_utf8_lossy(&buf[..n]).to_string())
     }
 
-    pub fn start_server(tx: Sender<IpcCommand>) {
+    /// Start the daemon's IPC endpoint and claim the single-daemon socket.
+    ///
+    /// Binding before connecting to Wayland prevents a second HyprOsk process
+    /// from reaching `zwp_input_method_manager_v2` and receiving the protocol's
+    /// `unavailable` event because another daemon already owns the seat.
+    pub fn start_server(tx: Sender<IpcCommand>) -> anyhow::Result<()> {
         let socket_path = Self::get_socket_path();
-        let _ = std::fs::remove_file(&socket_path);
+        let listener = bind_socket(&socket_path)?;
 
         thread::spawn(move || {
-            let listener = match UnixListener::bind(&socket_path) {
-                Ok(l) => l,
-                Err(e) => {
-                    tracing::error!("Failed to bind HyprOsk IPC socket at {:?}: {:?}", socket_path, e);
-                    return;
-                }
-            };
             tracing::info!("HyprOsk IPC server listening at {:?}", socket_path);
 
             for stream in listener.incoming() {
@@ -142,5 +140,76 @@ impl IpcServer {
                 }
             }
         });
+
+        Ok(())
+    }
+}
+
+/// Bind the daemon socket without stealing it from an already-running daemon.
+///
+/// A dead Unix socket is removed and retried, which handles a daemon that was
+/// terminated without a graceful IPC shutdown. A live socket is reported as a
+/// single-instance conflict instead.
+fn bind_socket(path: &Path) -> io::Result<UnixListener> {
+    match UnixListener::bind(path) {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+            if UnixStream::connect(path).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "another HyprOsk daemon is already running",
+                ));
+            }
+
+            // The endpoint is stale: no process accepted a connection, so it
+            // is safe for this new daemon to reclaim the path.
+            std::fs::remove_file(path)?;
+            UnixListener::bind(path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_socket;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_socket_path() -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after the Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "hyprosk-ipc-test-{}-{}.sock",
+            std::process::id(),
+            timestamp
+        ))
+    }
+
+    #[test]
+    fn second_daemon_cannot_claim_a_live_ipc_socket() {
+        let path = test_socket_path();
+        let first = bind_socket(&path).expect("first daemon should claim the socket");
+
+        let second = bind_socket(&path).expect_err("second daemon must be rejected");
+        assert_eq!(second.kind(), std::io::ErrorKind::AddrInUse);
+        assert!(second.to_string().contains("another HyprOsk daemon"));
+
+        drop(first);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn stale_socket_is_reclaimed() {
+        let path = test_socket_path();
+        let stale = UnixListener::bind(&path).expect("test should create a socket");
+        drop(stale);
+
+        let listener = bind_socket(&path).expect("new daemon should reclaim stale socket");
+        drop(listener);
+        let _ = std::fs::remove_file(path);
     }
 }

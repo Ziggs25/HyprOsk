@@ -14,7 +14,7 @@ It shows automatically when you focus a text field (GTK, Qt, Firefox, Chromium, 
 
 ## Requirements
 
-- Hyprland (or any wlroots compositor with `zwlr_layer_shell_v1` + `zwp_input_method_v2` + `zwp_virtual_keyboard_v1`)
+- Hyprland (or any compositor with `zwlr_layer_shell_v1` + `zwp_virtual_keyboard_v1`; `zwp_input_method_v2` is needed for readable surrounding text and automatic text-field activation)
 - Wayland session
 - For building from source: `cargo`, `pkg-config`, `wayland`, `wayland-protocols`, `libxkbcommon`, `wayland-scanner`
 
@@ -172,6 +172,28 @@ opacity = 0.95
 
 > Note: Rendering uses Slint as a headless software renderer into the Wayland SHM buffer. The colors in `ui/osk.slint` are currently the source of truth for the on-screen palette. `theme` values are kept for compatibility/fallback.
 
+## Text exchange and app coverage
+
+HyprOsk detects and reports the text protocols exposed by the compositor at
+startup. Its readable path is `zwp_input_method_v2`: when the compositor and
+focused app support it, HyprOsk receives surrounding text, cursor position, and
+selection state. This enables reliable suggestions and replacement, including
+browser inline completions.
+
+The `zwp_text_input_v3` global is also probed for diagnostics. It is the
+application-to-compositor side of the Wayland text-input handshake; merely
+binding its manager does not let an unrelated client read another app's text.
+
+When input-method-v2 is unavailable, HyprOsk uses
+`zwp_virtual_keyboard_v1`. That fallback can type into most apps, terminals,
+and XWayland windows, but it is write-only: the daemon cannot inspect existing
+text or selections. XWayland apps may get better readback through their own
+GTK/Qt/XIM, IBus, or Fcitx integration, depending on how the app was built.
+
+There is no safe Wayland API for universally scraping every app's text. Apps
+that do not expose a text-input or accessibility integration must use the
+write-only keyboard path.
+
 ## How auto-show works
 
 ```
@@ -190,7 +212,17 @@ Some apps need env vars/flags to announce text input over Wayland:
 - **Firefox:** `MOZ_ENABLE_WAYLAND=1`
 - **GTK 4 / Foot:** works without extra config
 
-If auto-show does not trigger, run `hyprosk status` and check your compositor supports `zwp_input_method_v2`.
+If auto-show does not trigger, run `hyprosk status` and inspect the daemon log
+for the reported text-input capabilities. A compositor may advertise the
+protocol globals while a particular seat still does not activate an input
+method; those apps will use the virtual-keyboard fallback.
+
+## Testing
+
+The repeatable automated and live-seat validation steps are documented in
+[TESTING.md](TESTING.md). Run the automated checks before testing text-field
+behavior manually. HyprOsk allows one daemon per seat and rejects duplicate
+launches before they can compete for `zwp_input_method_v2`.
 
 ## License
 

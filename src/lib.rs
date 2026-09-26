@@ -10,18 +10,15 @@ pub mod wayland;
 
 use anyhow::{Context, Result};
 use smithay_client_toolkit::{
-    compositor::CompositorState,
-    output::OutputState,
-    registry::RegistryState,
-    seat::SeatState,
-    shell::wlr_layer::LayerShell,
-    shm::Shm,
+    compositor::CompositorState, output::OutputState, registry::RegistryState, seat::SeatState,
+    shell::wlr_layer::LayerShell, shm::Shm,
 };
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
-use wayland_client::globals::registry_queue_init;
 use wayland_client::Connection;
+use wayland_client::globals::registry_queue_init;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 
@@ -35,22 +32,46 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
     tracing::info!("Starting HyprOsk (HeliBoard-inspired Wayland On-Screen Keyboard Daemon)...");
     let config = Config::load_or_create(config_path);
 
+    // Claim the IPC endpoint before binding any Wayland input-method object.
+    // This keeps duplicate daemon launches from competing for the one
+    // input-method-v2 object allowed on a seat.
+    let (ipc_tx, ipc_rx) = mpsc::channel();
+    IpcServer::start_server(ipc_tx).context("another HyprOsk daemon may already be running")?;
+
     let conn = Connection::connect_to_env().context("Failed to connect to Wayland display")?;
-    let (globals, mut event_queue) = registry_queue_init(&conn).context("Failed to initialize Wayland registry queue")?;
+    let (globals, mut event_queue) =
+        registry_queue_init(&conn).context("Failed to initialize Wayland registry queue")?;
     let qh = event_queue.handle();
 
-    let compositor_state = CompositorState::bind(&globals, &qh).context("wl_compositor global missing")?;
+    let compositor_state =
+        CompositorState::bind(&globals, &qh).context("wl_compositor global missing")?;
     let output_state = OutputState::new(&globals, &qh);
     let shm_state = Shm::bind(&globals, &qh).context("wl_shm global missing")?;
     let seat_state = SeatState::new(&globals, &qh);
-    let layer_shell = LayerShell::bind(&globals, &qh).context("zwlr_layer_shell_v1 missing: compositor must support layer-shell (e.g. Hyprland)")?;
+    let layer_shell = LayerShell::bind(&globals, &qh).context(
+        "zwlr_layer_shell_v1 missing: compositor must support layer-shell (e.g. Hyprland)",
+    )?;
 
     // Attempt to bind zwp_input_method_manager_v2 for automatic input field detection
     let im_manager: Option<ZwpInputMethodManagerV2> = globals.bind(&qh, 1..=1, ()).ok();
     if im_manager.is_some() {
-        tracing::info!("Successfully bound zwp_input_method_manager_v2 for automatic text field detection!");
+        tracing::info!(
+            "Successfully bound zwp_input_method_manager_v2 for automatic text field detection!"
+        );
     } else {
-        tracing::warn!("zwp_input_method_manager_v2 not found. Auto-show on text focus requires input-method-v2 support.");
+        tracing::warn!(
+            "zwp_input_method_manager_v2 not found. Auto-show on text focus requires input-method-v2 support."
+        );
+    }
+
+    // This is an app-to-compositor protocol. Probe it for diagnostics, but do
+    // not treat it as permission to read another client's text; input-method
+    // v2 remains the daemon's readable text-context path.
+    let text_input_v3_manager: Option<ZwpTextInputManagerV3> = globals.bind(&qh, 1..=1, ()).ok();
+    if text_input_v3_manager.is_some() {
+        tracing::info!("Compositor advertises zwp_text_input_v3");
+    } else {
+        tracing::warn!("Compositor does not advertise zwp_text_input_v3");
     }
 
     let vk_manager: Option<ZwpVirtualKeyboardManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
@@ -71,9 +92,15 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
 
     state.im_manager = im_manager.clone();
     state.vk_manager = vk_manager;
+    state.text_input_capabilities.input_method_v2 = im_manager.is_some();
+    state.text_input_capabilities.text_input_v3 = text_input_v3_manager.is_some();
+    state.text_input_capabilities.virtual_keyboard_v1 = state.vk_manager.is_some();
+    drop(text_input_v3_manager);
 
     // Initial roundtrip to populate seats and outputs
-    event_queue.roundtrip(&mut state).context("Initial Wayland roundtrip failed")?;
+    event_queue
+        .roundtrip(&mut state)
+        .context("Initial Wayland roundtrip failed")?;
 
     // Bind input method to default seat if manager exists
     if let Some(ref imm) = state.im_manager
@@ -86,14 +113,14 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
 
     // Bind virtual keyboard for keycodes (arrows, Esc, and fallback keys)
     state.init_virtual_keyboard(&qh);
+    state.log_text_input_capabilities();
 
-    // Set up IPC channels
-    let (ipc_tx, ipc_rx) = mpsc::channel();
+    // Set up the remaining event channels. The IPC channel was created before
+    // Wayland setup so duplicate daemons fail before claiming the seat.
     let (hypr_tx, hypr_rx) = mpsc::channel();
     let (folio_tx, folio_rx) = mpsc::channel();
     let (touch_tx, touch_rx) = mpsc::channel();
 
-    IpcServer::start_server(ipc_tx);
     HyprlandIpcListener::start_listener(hypr_tx);
 
     if config.behavior.folio_mode {

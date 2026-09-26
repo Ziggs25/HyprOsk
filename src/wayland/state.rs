@@ -1,37 +1,35 @@
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
+    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm, delegate_touch,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
     seat::{
+        Capability, SeatHandler, SeatState,
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
         touch::TouchHandler,
-        Capability, SeatHandler, SeatState,
-    },
-    shell::wlr_layer::{
-        LayerShell, LayerSurface,
     },
     shell::WaylandSurface,
+    shell::wlr_layer::{LayerShell, LayerSurface},
     shm::{
-        slot::{Buffer, SlotPool},
         Shm, ShmHandler,
+        slot::{Buffer, SlotPool},
     },
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, delegate_touch, registry_handlers,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wayland_client::{
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch, wl_shm},
     Connection, QueueHandle,
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch},
 };
 use wayland_protocols_misc::zwp_input_method_v2::client::{
-    zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
-    zwp_input_method_v2::ZwpInputMethodV2,
+    zwp_input_method_manager_v2::ZwpInputMethodManagerV2, zwp_input_method_v2::ZwpInputMethodV2,
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
@@ -39,14 +37,14 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 
 use crate::config::Config;
-use crate::layout::{key::KeyAction, CustomLayoutFile, KeyboardLayout, LayerId, LayoutMode};
+use crate::layout::{CustomLayoutFile, KeyboardLayout, LayerId, LayoutMode, key::KeyAction};
 use crate::render::engine::{Rect, RenderEngine};
 use crate::render::slint::SlintScene;
 use crate::render::theme::Theme;
 use crate::suggest::SuggestEngine;
-use crate::wayland::input_method::InputMethodState;
+use crate::wayland::input_method::{InputMethodState, TextInputCapabilities, TextInputSource};
 use crate::wayland::layer_shell::create_layer_surface;
-use crate::wayland::virtual_keyboard::{create_keymap_fd, KEYMAP_FORMAT};
+use crate::wayland::virtual_keyboard::{KEYMAP_FORMAT, create_keymap_fd};
 
 // Common Linux evdev keycodes
 const KEY_ESC: u32 = 1;
@@ -114,6 +112,8 @@ pub struct WaylandState {
 
     // Input, Suggestions & Gesture State
     pub im_state: InputMethodState,
+    pub text_input_capabilities: TextInputCapabilities,
+    pub fallback_warning_emitted: bool,
     pub current_layer: LayerId,
     pub layout_mode: LayoutMode,
     pub custom_layout: Option<CustomLayoutFile>,
@@ -200,13 +200,12 @@ impl WaylandState {
         shm: &Shm,
         config: Config,
     ) -> Self {
-        let pool = SlotPool::new(
-            (1000 * config.general.height.max(1) * 4) as usize,
-            shm,
-        ).expect("Failed to create SHM slot pool");
+        let pool = SlotPool::new((1000 * config.general.height.max(1) * 4) as usize, shm)
+            .expect("Failed to create SHM slot pool");
         let theme = Theme::from(&config.theme);
         let height = config.general.height;
-        let layout_mode = LayoutMode::parse_mode(&config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
+        let layout_mode =
+            LayoutMode::parse_mode(&config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
         let custom_layout = config
             .general
             .layout_file
@@ -255,6 +254,8 @@ impl WaylandState {
             canvas_buffers: Vec::new(),
             canvas_size: (0, 0),
             im_state: InputMethodState::default(),
+            text_input_capabilities: TextInputCapabilities::default(),
+            fallback_warning_emitted: false,
             current_layer: LayerId::Lower,
             layout_mode,
             custom_layout,
@@ -296,6 +297,46 @@ impl WaylandState {
         }
     }
 
+    /// Return the source currently used for text exchange with the focused app.
+    /// Input-method v2 is the only source that provides readable surrounding
+    /// text; the virtual keyboard remains a write-only fallback.
+    pub fn active_text_input_source(&self) -> TextInputSource {
+        if self.input_method.is_some() && self.im_state.is_active.load(Ordering::SeqCst) {
+            TextInputSource::InputMethodV2
+        } else if self.virtual_keyboard.is_some() {
+            TextInputSource::VirtualKeyboard
+        } else {
+            TextInputSource::Unavailable
+        }
+    }
+
+    pub fn log_text_input_capabilities(&self) {
+        let input_method_bound = self.input_method.is_some();
+        let input_method_active = self.im_state.is_active.load(Ordering::SeqCst);
+        tracing::info!(
+            "Text input capabilities: input_method_v2={} text_input_v3={} virtual_keyboard_v1={} input_method_bound={} input_method_active={} active_source={}",
+            self.text_input_capabilities.input_method_v2,
+            self.text_input_capabilities.text_input_v3,
+            self.text_input_capabilities.virtual_keyboard_v1,
+            input_method_bound,
+            input_method_active,
+            self.active_text_input_source().label(),
+        );
+        if self.text_input_capabilities.input_method_v2 && input_method_bound && !input_method_active {
+            tracing::info!(
+                "Input-method-v2 is ready; waiting for a focused text field to activate it"
+            );
+        } else if !input_method_bound && self.text_input_capabilities.input_method_v2 {
+            tracing::warn!(
+                "Input-method-v2 is advertised but unavailable on this seat; using virtual-keyboard fallback"
+            );
+        } else if !self.text_input_capabilities.input_method_v2 {
+            tracing::warn!(
+                "Text readback is unavailable; using virtual-keyboard fallback (write-only)"
+            );
+        }
+    }
+
     pub fn show_keyboard(&mut self, qh: &QueueHandle<Self>) {
         if self.is_visible {
             return;
@@ -315,7 +356,7 @@ impl WaylandState {
         }
 
         if let Some(ref text) = self.im_state.surrounding_text {
-            let cursor = self.im_state.cursor_pos;
+            let cursor = self.im_state.cursor_pos.min(self.im_state.anchor_pos);
             self.suggest_engine.sync_with_text(text, cursor as usize);
         }
 
@@ -491,15 +532,14 @@ impl WaylandState {
         let new_config = Config::load_or_create(None);
         self.theme = Theme::from(&new_config.theme);
         self.height = new_config.general.height;
-        self.layout_mode = LayoutMode::parse_mode(&new_config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
+        self.layout_mode =
+            LayoutMode::parse_mode(&new_config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
         self.custom_layout = new_config
             .general
             .layout_file
             .as_deref()
             .or(Some(new_config.general.layout_mode.as_str()))
-            .and_then(|f| {
-                CustomLayoutFile::load_from_name_or_path(f).ok()
-            });
+            .and_then(|f| CustomLayoutFile::load_from_name_or_path(f).ok());
         self.config = new_config;
         self.sync_surface_geometry();
 
@@ -512,15 +552,27 @@ impl WaylandState {
         if let Some(ref surface) = self.layer_surface {
             use smithay_client_toolkit::shell::wlr_layer::Anchor;
 
-            let (target_w, target_h, margin_b, margin_h) = if let Some(ref custom) = self.custom_layout {
-                let h = custom.height.unwrap_or(self.config.general.height);
-                let w = custom.width.unwrap_or(0);
-                let mb = custom.margin_bottom.unwrap_or(self.config.general.margin_bottom);
-                let mh = if custom.width.is_some() { 0 } else { self.config.general.margin_horizontal };
-                (w, h, mb, mh)
-            } else {
-                (0, self.config.general.height, self.config.general.margin_bottom, self.config.general.margin_horizontal)
-            };
+            let (target_w, target_h, margin_b, margin_h) =
+                if let Some(ref custom) = self.custom_layout {
+                    let h = custom.height.unwrap_or(self.config.general.height);
+                    let w = custom.width.unwrap_or(0);
+                    let mb = custom
+                        .margin_bottom
+                        .unwrap_or(self.config.general.margin_bottom);
+                    let mh = if custom.width.is_some() {
+                        0
+                    } else {
+                        self.config.general.margin_horizontal
+                    };
+                    (w, h, mb, mh)
+                } else {
+                    (
+                        0,
+                        self.config.general.height,
+                        self.config.general.margin_bottom,
+                        self.config.general.margin_horizontal,
+                    )
+                };
 
             self.height = target_h;
             if target_w > 0 {
@@ -543,7 +595,11 @@ impl WaylandState {
         }
     }
 
-    pub fn load_layout(&mut self, name_or_path: &str, qh: &QueueHandle<Self>) -> anyhow::Result<()> {
+    pub fn load_layout(
+        &mut self,
+        name_or_path: &str,
+        qh: &QueueHandle<Self>,
+    ) -> anyhow::Result<()> {
         let custom = CustomLayoutFile::load_from_name_or_path(name_or_path)?;
         if let Some(mode) = LayoutMode::parse_mode(&custom.mode) {
             self.layout_mode = mode;
@@ -647,14 +703,22 @@ impl WaylandState {
     /// Emit a physical press for a held modifier (no-op without a bound vk).
     fn vk_press_mod(&self, mask: u32) {
         if let (Some(vk), Some(keycode)) = (&self.virtual_keyboard, Self::vk_mod_keycode(mask)) {
-            vk.key(Self::vk_time_now(), keycode, wl_keyboard::KeyState::Pressed.into());
+            vk.key(
+                Self::vk_time_now(),
+                keycode,
+                wl_keyboard::KeyState::Pressed.into(),
+            );
         }
     }
 
     /// Emit a physical release for a held modifier (no-op without a bound vk).
     fn vk_release_mod(&self, mask: u32) {
         if let (Some(vk), Some(keycode)) = (&self.virtual_keyboard, Self::vk_mod_keycode(mask)) {
-            vk.key(Self::vk_time_now(), keycode, wl_keyboard::KeyState::Released.into());
+            vk.key(
+                Self::vk_time_now(),
+                keycode,
+                wl_keyboard::KeyState::Released.into(),
+            );
         }
     }
 
@@ -820,7 +884,12 @@ impl WaylandState {
         if self.held_mods == 0 {
             return;
         }
-        for mask in [Self::MOD_SHIFT, Self::MOD_CTRL, Self::MOD_ALT, Self::MOD_SUPER] {
+        for mask in [
+            Self::MOD_SHIFT,
+            Self::MOD_CTRL,
+            Self::MOD_ALT,
+            Self::MOD_SUPER,
+        ] {
             if self.held_mods & mask != 0 {
                 self.vk_release_mod(mask);
             }
@@ -877,7 +946,15 @@ impl WaylandState {
     /// the Folio test runs survive.
     pub fn on_folio_change(&mut self, attached: bool, qh: &QueueHandle<Self>) {
         self.folio_attached = attached;
-        tracing::info!("Folio keyboard {} -> auto-show {}", if attached { "attached" } else { "detached" }, if self.allow_auto_show() { "enabled" } else { "suppressed" });
+        tracing::info!(
+            "Folio keyboard {} -> auto-show {}",
+            if attached { "attached" } else { "detached" },
+            if self.allow_auto_show() {
+                "enabled"
+            } else {
+                "suppressed"
+            }
+        );
         if self.config.behavior.folio_mode && attached && self.is_visible && !self.manually_shown {
             self.hide_keyboard(qh);
         }
@@ -925,8 +1002,6 @@ impl WaylandState {
             (self.clipboard_scroll_y / max).clamp(0.0, 1.0)
         }
     }
-
-
 
     /// Resolve wl-paste executable path, checking PATH, Nix profiles, and Nix store.
     pub fn find_wl_paste() -> Option<&'static str> {
@@ -1287,8 +1362,12 @@ impl WaylandState {
                 self.clipboard_scroll_y,
             );
         } else {
-            self.key_rects =
-                RenderEngine::calculate_key_rects(&self.layout, self.width, self.height, &self.theme);
+            self.key_rects = RenderEngine::calculate_key_rects(
+                &self.layout,
+                self.width,
+                self.height,
+                &self.theme,
+            );
         }
     }
 
@@ -1297,10 +1376,7 @@ impl WaylandState {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
             let mut lay = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
             if let Some(ref custom) = self.custom_layout {
-                lay.colors = custom
-                    .colors
-                    .as_ref()
-                    .map(|c| c.resolved(&custom.m3_map));
+                lay.colors = custom.colors.as_ref().map(|c| c.resolved(&custom.m3_map));
                 lay.key_spacing = custom.key_spacing;
                 lay.row_spacing = custom.row_spacing;
                 lay.padding_x = custom.padding_x;
@@ -1318,8 +1394,12 @@ impl WaylandState {
                 self.caps_lock,
             );
         } else {
-            self.layout =
-                KeyboardLayout::get_layout_for_mode(self.current_layer, &self.suggest_engine.candidates, self.caps_lock, self.layout_mode);
+            self.layout = KeyboardLayout::get_layout_for_mode(
+                self.current_layer,
+                &self.suggest_engine.candidates,
+                self.caps_lock,
+                self.layout_mode,
+            );
         }
         self.update_key_rects();
         self.redraw(qh);
@@ -1340,7 +1420,8 @@ impl WaylandState {
             if self.current_layer != LayerId::Symbols && self.current_layer != LayerId::Symbols2 {
                 self.switch_layer(LayerId::Symbols, qh);
             }
-        } else if (self.current_layer == LayerId::Symbols || self.current_layer == LayerId::Symbols2)
+        } else if (self.current_layer == LayerId::Symbols
+            || self.current_layer == LayerId::Symbols2)
             && matches!(purpose, 0 | 1 | 5 | 6 | 7 | 8 | 13)
         {
             // Textual fields (normal, alpha, url, email, etc.) default back to Lower
@@ -1364,7 +1445,9 @@ impl WaylandState {
         // underlying memfd stops growing.
         if self.canvas_buffers.is_empty() || self.canvas_size != (width, height) {
             let needed = (height as usize) * (stride as usize) * IN_FLIGHT_BUFFERS;
-            if self.pool.len() < needed && let Err(e) = self.pool.resize(needed) {
+            if self.pool.len() < needed
+                && let Err(e) = self.pool.resize(needed)
+            {
                 tracing::error!("Failed to grow SHM pool: {:?}", e);
                 return;
             }
@@ -1442,12 +1525,16 @@ impl WaylandState {
             if let Some(ref surface) = self.layer_surface
                 && buffer.attach_to(surface.wl_surface()).is_ok()
             {
-                if let Some(ref rects) = slint_damage && !rects.is_empty() {
+                if let Some(ref rects) = slint_damage
+                    && !rects.is_empty()
+                {
                     for &(dx, dy, dw, dh) in rects {
                         surface.wl_surface().damage_buffer(dx, dy, dw, dh);
                     }
                 } else {
-                    surface.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
+                    surface
+                        .wl_surface()
+                        .damage_buffer(0, 0, width as i32, height as i32);
                 }
                 surface.commit();
             }
@@ -1494,7 +1581,9 @@ impl WaylandState {
 
         match action {
             KeyAction::Text(text) => {
-                let has_command_mods = ((self.pending_mods | self.held_mods) & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                let has_command_mods = ((self.pending_mods | self.held_mods)
+                    & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER))
+                    != 0;
                 if !has_command_mods {
                     for ch in text.chars() {
                         self.suggest_engine.push_char(ch);
@@ -1526,44 +1615,91 @@ impl WaylandState {
                     if is_next_word {
                         self.suggest_engine.on_word_selected(&chosen_word);
                         self.send_text(&format!("{} ", chosen_word));
-                    } else if chosen_word == cur {
-                        tracing::info!("suggest same -> space");
-                        self.suggest_engine.on_word_selected(&chosen_word);
-                        self.send_text(" ");
                     } else {
-                        // Unified virtual-keyboard replacement: Chromium/Ozone Wayland drops
-                        // zwp_input_method_v2::delete_surrounding_text, and mixing VK
-                        // backspaces with im.commit_string races across protocols
-                        // (leftover chars / 'bbro'). Keeping deletes + inserts on the
-                        // single VK event stream guarantees FIFO ordering.
-                        let replacement = format!("{} ", chosen_word);
-                        let n = cur.chars().count();
-                        tracing::info!("suggest vk replace: delete {} chars, insert '{}'", n, replacement);
-                        for _ in 0..n {
-                            self.send_backspace();
-                        }
-                        for ch in replacement.chars() {
-                            if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
-                                self.send_key_with_modifiers(keycode, shift);
-                            } else {
-                                self.send_text(&ch.to_string());
+                        let (delete_count, replace_range) = calculate_replacement_target(
+                            &cur,
+                            self.im_state.surrounding_text.as_deref(),
+                            self.im_state.cursor_pos,
+                            self.im_state.anchor_pos,
+                        );
+                        let app_word = self
+                            .im_state
+                            .surrounding_text
+                            .as_deref()
+                            .and_then(|text| {
+                                replace_range.map(|(start, end)| text[start..end].to_string())
+                            })
+                            .unwrap_or_else(|| cur.clone());
+                        let has_selection = self.im_state.cursor_pos != self.im_state.anchor_pos;
+
+                        // A selected host completion must still be replaced even
+                        // when it happens to equal our chosen word: the typed
+                        // prefix remains outside the host's selected suffix.
+                        if !has_selection && chosen_word == app_word {
+                            tracing::info!("suggest same -> space");
+                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.send_text(" ");
+                        } else {
+                            // Unified virtual-keyboard replacement: Chromium/Ozone Wayland drops
+                            // zwp_input_method_v2::delete_surrounding_text, and mixing VK
+                            // backspaces with im.commit_string races across protocols
+                            // (leftover chars / 'bbro'). Keeping deletes + inserts on the
+                            // single VK event stream guarantees FIFO ordering.
+                            let replacement = format!("{} ", chosen_word);
+                            tracing::info!(
+                                "suggest vk replace: delete {} chars (cur='{}', app_word='{}'), insert '{}'",
+                                delete_count,
+                                cur,
+                                app_word,
+                                replacement
+                            );
+                            for _ in 0..delete_count {
+                                self.send_backspace();
                             }
-                        }
-                        if let Some(ref mut t) = self.im_state.surrounding_text {
-                            let pos = (self.im_state.cursor_pos as usize).min(t.len());
-                            let before_pos = pos.saturating_sub(cur.len());
-                            if t[..pos].ends_with(&cur) {
-                                t.replace_range(before_pos..pos, &replacement);
-                                self.im_state.cursor_pos = (before_pos + replacement.len()) as u32;
+                            for ch in replacement.chars() {
+                                if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
+                                    self.send_key_with_modifiers(keycode, shift);
+                                } else {
+                                    self.send_text(&ch.to_string());
+                                }
                             }
+                            if let Some(ref mut text) = self.im_state.surrounding_text {
+                                if let Some((start, end)) = replace_range {
+                                    if start <= end
+                                        && end <= text.len()
+                                        && text.is_char_boundary(start)
+                                        && text.is_char_boundary(end)
+                                    {
+                                        text.replace_range(start..end, &replacement);
+                                        let new_cursor = (start + replacement.len()) as u32;
+                                        self.im_state.cursor_pos = new_cursor;
+                                        self.im_state.anchor_pos = new_cursor;
+                                    }
+                                } else {
+                                    let pos = text.floor_char_boundary(
+                                        (self.im_state.cursor_pos as usize).min(text.len()),
+                                    );
+                                    let before_pos = pos.saturating_sub(cur.len());
+                                    if text.is_char_boundary(before_pos)
+                                        && text.is_char_boundary(pos)
+                                        && text[..pos].ends_with(&cur)
+                                    {
+                                        text.replace_range(before_pos..pos, &replacement);
+                                        let new_cursor = (before_pos + replacement.len()) as u32;
+                                        self.im_state.cursor_pos = new_cursor;
+                                        self.im_state.anchor_pos = new_cursor;
+                                    }
+                                }
+                            }
+                            self.suggest_engine.on_word_selected(&chosen_word);
                         }
-                        self.suggest_engine.on_word_selected(&chosen_word);
                     }
                 }
             }
             KeyAction::Backspace => {
                 self.suggest_engine.pop_char();
                 self.send_backspace();
+                self.pop_surrounding_char();
                 self.repeat_key = Some(KeyAction::Backspace);
                 self.repeat_start = Some(Instant::now());
                 self.last_repeat_at = Some(Instant::now());
@@ -1714,7 +1850,12 @@ impl WaylandState {
         self.sync_layout_and_redraw(qh);
     }
 
-    pub fn sync_suggest_with_surrounding(&mut self, text: &str, cursor: u32, qh: &QueueHandle<Self>) {
+    pub fn sync_suggest_with_surrounding(
+        &mut self,
+        text: &str,
+        cursor: u32,
+        qh: &QueueHandle<Self>,
+    ) {
         tracing::info!(
             "sync_suggest surrounding='{}' cursor={} current='{}' before sync",
             text,
@@ -1747,6 +1888,7 @@ impl WaylandState {
                         KeyAction::Backspace => {
                             self.suggest_engine.pop_char();
                             self.send_backspace();
+                            self.pop_surrounding_char();
                             self.sync_layout_and_redraw(qh);
                         }
                         KeyAction::ArrowLeft => {
@@ -1820,7 +1962,9 @@ impl WaylandState {
     pub fn handle_motion(&mut self, x: f64, y: f64, qh: &QueueHandle<Self>) {
         // Clipboard swipe scroll: vertical drag moves the card grid. Once the
         // tap threshold is exceeded the pending tap is treated as a scroll.
-        if self.clipboard_mode && let Some((_, start_y, start_scroll)) = self.clipboard_drag_start {
+        if self.clipboard_mode
+            && let Some((_, start_y, start_scroll)) = self.clipboard_drag_start
+        {
             let dy = (start_y - y) as f32;
             if dy.abs() > 6.0 {
                 self.clipboard_dragging = true;
@@ -1854,12 +1998,24 @@ impl WaylandState {
 
     pub fn send_text(&mut self, text: &str) {
         let has_mods = ((self.pending_mods | self.held_mods) & !Self::MOD_SHIFT) != 0;
-        let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
-        tracing::info!("send_text '{}' is_im={} has_mods={} surrounding={:?} cursor={}", text, is_im_active, has_mods, self.im_state.surrounding_text, self.im_state.cursor_pos);
-        let use_im = is_im_active && !has_mods;
-        if use_im
-            && let Some(ref im) = self.input_method
-        {
+        let source = self.active_text_input_source();
+        tracing::info!(
+            "send_text '{}' source={} has_mods={} surrounding={:?} cursor={} anchor={}",
+            text,
+            source.label(),
+            has_mods,
+            self.im_state.surrounding_text,
+            self.im_state.cursor_pos,
+            self.im_state.anchor_pos,
+        );
+        if source == TextInputSource::VirtualKeyboard && !self.fallback_warning_emitted {
+            tracing::warn!(
+                "Using virtual-keyboard fallback: text can be inserted, but existing app text and selections are unreadable"
+            );
+            self.fallback_warning_emitted = true;
+        }
+        let use_im = source == TextInputSource::InputMethodV2 && !has_mods;
+        if use_im && let Some(ref im) = self.input_method {
             im.commit_string(text.to_string());
             im.commit(self.im_state.serial);
             self.im_state.serial = self.im_state.serial.wrapping_add(1);
@@ -1882,6 +2038,36 @@ impl WaylandState {
         self.send_keycode(KEY_BACKSPACE);
     }
 
+    /// Keep the cached input-method buffer aligned with a backspace emitted
+    /// through the virtual keyboard while the compositor echo is in flight.
+    pub fn pop_surrounding_char(&mut self) {
+        let cursor = self.im_state.cursor_pos as usize;
+        let anchor = self.im_state.anchor_pos as usize;
+        let Some(ref mut text) = self.im_state.surrounding_text else {
+            return;
+        };
+        let cursor = text.floor_char_boundary(cursor.min(text.len()));
+        let anchor = text.floor_char_boundary(anchor.min(text.len()));
+
+        if cursor != anchor {
+            let start = cursor.min(anchor);
+            let end = cursor.max(anchor);
+            if text.is_char_boundary(start) && text.is_char_boundary(end) {
+                text.replace_range(start..end, "");
+                self.im_state.cursor_pos = start as u32;
+                self.im_state.anchor_pos = start as u32;
+            }
+        } else if cursor > 0 {
+            let previous = text[..cursor]
+                .char_indices()
+                .last()
+                .map_or(0, |(index, _)| index);
+            text.drain(previous..cursor);
+            self.im_state.cursor_pos = previous as u32;
+            self.im_state.anchor_pos = previous as u32;
+        }
+    }
+
     pub fn send_enter(&mut self) {
         self.send_keycode(KEY_ENTER);
     }
@@ -1891,8 +2077,7 @@ impl WaylandState {
     }
 
     pub fn send_space(&mut self) {
-        let is_im_active = self.im_state.is_active.load(Ordering::SeqCst);
-        if is_im_active {
+        if self.active_text_input_source() == TextInputSource::InputMethodV2 {
             self.send_text(" ");
         } else {
             self.send_keycode(KEY_SPACE);
@@ -2034,20 +2219,73 @@ impl ProvidesRegistryState for WaylandState {
 }
 
 impl CompositorHandler for WaylandState {
-    fn scale_factor_changed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _scale: i32) {}
-    fn transform_changed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _transform: wl_output::Transform) {}
-    fn frame(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _time: u32) {}
-    fn surface_enter(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _output: &wl_output::WlOutput) {}
-    fn surface_leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface, _output: &wl_output::WlOutput) {}
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _scale: i32,
+    ) {
+    }
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _transform: wl_output::Transform,
+    ) {
+    }
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
 }
 
 impl OutputHandler for WaylandState {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput) {}
-    fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput) {}
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
 }
 
 impl ShmHandler for WaylandState {
@@ -2063,7 +2301,13 @@ impl SeatHandler for WaylandState {
     fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {
         self.init_virtual_keyboard(qh);
     }
-    fn new_capability(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, capability: Capability) {
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
         if capability == Capability::Pointer {
             let _ = self.seat_state.get_pointer(qh, &seat);
         }
@@ -2071,8 +2315,16 @@ impl SeatHandler for WaylandState {
             let _ = self.seat_state.get_touch(qh, &seat);
         }
     }
-    fn remove_capability(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat, _capability: Capability) {}
-    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {}
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _seat: wl_seat::WlSeat,
+        _capability: Capability,
+    ) {
+    }
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {
+    }
 }
 
 impl PointerHandler for WaylandState {
@@ -2096,11 +2348,12 @@ impl PointerHandler for WaylandState {
                         self.clipboard_drag_start = Some((x, y, self.clipboard_scroll_y));
                         self.clipboard_dragging = false;
                     }
-                    if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &self.key_rects, x, y) {
+                    if let Some((r_idx, k_idx, key)) =
+                        RenderEngine::hit_test(&self.layout, &self.key_rects, x, y)
+                    {
                         // Defer clipboard pastes to release so a vertical swipe
                         // scrolls instead of pasting.
-                        if self.clipboard_mode
-                            && matches!(key.action, KeyAction::ClipboardItem(_))
+                        if self.clipboard_mode && matches!(key.action, KeyAction::ClipboardItem(_))
                         {
                             self.pressed_key = Some((r_idx, k_idx));
                             if !self.pressed_keys.contains(&(r_idx, k_idx)) {
@@ -2121,7 +2374,11 @@ impl PointerHandler for WaylandState {
                             if !self.pressed_keys.contains(&(r_idx, k_idx)) {
                                 self.pressed_keys.push((r_idx, k_idx));
                             }
-                            self.pointer_pending_detail = Some((key.action.clone(), key.secondary_label.clone(), Instant::now()));
+                            self.pointer_pending_detail = Some((
+                                key.action.clone(),
+                                key.secondary_label.clone(),
+                                Instant::now(),
+                            ));
                             self.redraw(qh);
                         } else {
                             self.handle_key_press(r_idx, k_idx, qh, Self::POINTER_TOUCH_ID);
@@ -2134,7 +2391,9 @@ impl PointerHandler for WaylandState {
                     self.clipboard_dragging = false;
                     // Deferred clipboard tap: paste only when it was a tap,
                     // not a scroll swipe.
-                    if self.clipboard_mode && let Some((r_idx, k_idx)) = self.pressed_key {
+                    if self.clipboard_mode
+                        && let Some((r_idx, k_idx)) = self.pressed_key
+                    {
                         let is_clip = self
                             .layout
                             .rows
@@ -2153,10 +2412,14 @@ impl PointerHandler for WaylandState {
                             continue;
                         }
                     }
-                    if let Some((action, secondary_label, down_time)) = self.pointer_pending_detail.take() {
+                    if let Some((action, secondary_label, down_time)) =
+                        self.pointer_pending_detail.take()
+                    {
                         let elapsed = down_time.elapsed();
                         let is_long_press = elapsed.as_millis() >= 300;
-                        let has_command_mods = ((self.pending_mods | self.held_mods) & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                        let has_command_mods = ((self.pending_mods | self.held_mods)
+                            & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER))
+                            != 0;
                         if is_long_press && let Some(sec) = secondary_label {
                             if !has_command_mods {
                                 for ch in sec.chars() {
@@ -2238,12 +2501,20 @@ impl TouchHandler for WaylandState {
     ) {
         self.note_input(true);
         let (x, y) = position;
-        tracing::info!("touch down id={} pos=({:.0},{:.0}) active={}", _id, x, y, self.active_touches.len()+1);
+        tracing::info!(
+            "touch down id={} pos=({:.0},{:.0}) active={}",
+            _id,
+            x,
+            y,
+            self.active_touches.len() + 1
+        );
         if self.clipboard_mode {
             self.clipboard_drag_start = Some((x, y, self.clipboard_scroll_y));
             self.clipboard_dragging = false;
         }
-        if let Some((r_idx, k_idx, key)) = RenderEngine::hit_test(&self.layout, &self.key_rects, x, y) {
+        if let Some((r_idx, k_idx, key)) =
+            RenderEngine::hit_test(&self.layout, &self.key_rects, x, y)
+        {
             tracing::info!("  -> hit key {:?} at {}:{}", key.action, r_idx, k_idx);
             // Defer clipboard pastes to release so a vertical swipe scrolls
             // instead of pasting.
@@ -2265,7 +2536,14 @@ impl TouchHandler for WaylandState {
             if matches!(key.action, KeyAction::Text(_)) {
                 self.last_shift_press = None;
                 self.pending_taps.insert(_id, (r_idx, k_idx));
-                self.pending_tap_details.insert(_id, (key.action.clone(), key.secondary_label.clone(), Instant::now()));
+                self.pending_tap_details.insert(
+                    _id,
+                    (
+                        key.action.clone(),
+                        key.secondary_label.clone(),
+                        Instant::now(),
+                    ),
+                );
                 if !self.pressed_keys.contains(&(r_idx, k_idx)) {
                     self.pressed_keys.push((r_idx, k_idx));
                 }
@@ -2289,7 +2567,11 @@ impl TouchHandler for WaylandState {
         _time: u32,
         _id: i32,
     ) {
-        tracing::info!("touch up id={} active_before={}", _id, self.active_touches.len());
+        tracing::info!(
+            "touch up id={} active_before={}",
+            _id,
+            self.active_touches.len()
+        );
         let details = self.pending_tap_details.remove(&_id);
         if let Some(pending) = self.pending_taps.remove(&_id) {
             self.active_touches.remove(&_id);
@@ -2299,7 +2581,9 @@ impl TouchHandler for WaylandState {
                 let elapsed = down_time.elapsed();
                 let is_long_press = elapsed.as_millis() >= 300;
 
-                let has_command_mods = ((self.pending_mods | self.held_mods) & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER)) != 0;
+                let has_command_mods = ((self.pending_mods | self.held_mods)
+                    & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER))
+                    != 0;
                 if is_long_press && let Some(sec) = secondary_label {
                     if !has_command_mods {
                         for ch in sec.chars() {
@@ -2423,8 +2707,80 @@ impl TouchHandler for WaylandState {
         self.clipboard_dragging = false;
     }
 
-    fn shape(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _major: f64, _minor: f64) {}
-    fn orientation(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch, _id: i32, _orientation: f64) {}
+    fn shape(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _major: f64,
+        _minor: f64,
+    ) {
+    }
+    fn orientation(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _orientation: f64,
+    ) {
+    }
+}
+
+/// Determine the word range and number of backspace keypresses needed for a
+/// suggestion replacement.
+///
+/// Host inline completion is represented by a selection in surrounding text:
+/// the typed prefix is before the selection and the predicted suffix is inside
+/// it. One backspace removes that selection, then one backspace is needed for
+/// each prefix character. Keeping this as keypresses matches the virtual
+/// keyboard path used for Chromium/Ozone clients.
+pub fn calculate_replacement_target(
+    current_word: &str,
+    surrounding_text: Option<&str>,
+    cursor_pos: u32,
+    anchor_pos: u32,
+) -> (usize, Option<(usize, usize)>) {
+    let Some(text) = surrounding_text else {
+        return (current_word.chars().count(), None);
+    };
+
+    let cursor = text.floor_char_boundary((cursor_pos as usize).min(text.len()));
+    let anchor = text.floor_char_boundary((anchor_pos as usize).min(text.len()));
+    let start = cursor.min(anchor);
+    let end = cursor.max(anchor);
+
+    if start != end {
+        // Inline completions can contain punctuation (for example a URL), so
+        // whitespace is the safe token boundary for the selected host text.
+        let token_start = text[..start]
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| ch.is_whitespace())
+            .map_or(0, |(index, ch)| index + ch.len_utf8());
+        let prefix_count = text[token_start..start].chars().count();
+        return (prefix_count + 1, Some((token_start, end)));
+    }
+
+    let before = &text[..cursor];
+    if !before.is_empty() && !before.chars().last().is_some_and(char::is_whitespace) {
+        let word_start = before
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !ch.is_alphabetic() && *ch != '\'')
+            .map_or(0, |(index, ch)| index + ch.len_utf8());
+        let app_word = &before[word_start..];
+        // A delayed surrounding-text echo may contain a shorter prefix than
+        // the locally tracked word. Do not trust it for deletion in that case.
+        if !app_word.is_empty()
+            && (current_word.starts_with(app_word) || app_word.eq_ignore_ascii_case(current_word))
+        {
+            return (app_word.chars().count(), Some((word_start, cursor)));
+        }
+    }
+
+    (current_word.chars().count(), None)
 }
 
 /// Linux evdev keycode mapping for US QWERTY virtual keyboard fallback
@@ -2568,5 +2924,73 @@ mod state_tests {
                 "{class} should not count as terminal"
             );
         }
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_normal() {
+        let (count, range) =
+            super::calculate_replacement_target("worl", Some("hello worl"), 10, 10);
+        assert_eq!(count, 4);
+        assert_eq!(range, Some((6, 10)));
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_after_partial_backspace() {
+        let (count, range) =
+            super::calculate_replacement_target("world", Some("hello worl"), 10, 10);
+        assert_eq!(count, 4);
+        assert_eq!(range, Some((6, 10)));
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_single_word() {
+        let (count, range) = super::calculate_replacement_target("upda", Some("upda"), 4, 4);
+        assert_eq!(count, 4);
+        assert_eq!(range, Some((0, 4)));
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_utf8_prefix() {
+        let (count, range) = super::calculate_replacement_target("worl", Some("Café worl"), 10, 10);
+        assert_eq!(count, 4);
+        assert_eq!(range, Some((6, 10)));
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_without_surrounding_text() {
+        let (count, range) = super::calculate_replacement_target("worl", None, 0, 0);
+        assert_eq!(count, 4);
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_rejects_stale_longer_word() {
+        let (count, range) = super::calculate_replacement_target("hel", Some("hello"), 5, 5);
+        assert_eq!(count, 3);
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_host_autocomplete_anchor_before_cursor() {
+        let (count, range) =
+            super::calculate_replacement_target("w", Some("www.youtube.com"), 15, 1);
+        assert_eq!(count, 2);
+        assert_eq!(range, Some((0, 15)));
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_host_autocomplete_cursor_before_anchor() {
+        let (count, range) =
+            super::calculate_replacement_target("w", Some("www.youtube.com"), 1, 15);
+        assert_eq!(count, 2);
+        assert_eq!(range, Some((0, 15)));
+    }
+
+    #[test]
+    fn test_calculate_replacement_target_host_autocomplete_with_preceding_text() {
+        let (count, range) =
+            super::calculate_replacement_target("w", Some("visit www.youtube.com"), 21, 7);
+        assert_eq!(count, 2);
+        assert_eq!(range, Some((6, 21)));
     }
 }
