@@ -1632,6 +1632,87 @@ impl WaylandState {
                             .unwrap_or_else(|| cur.clone());
                         let has_selection = self.im_state.cursor_pos != self.im_state.anchor_pos;
 
+                        // Helium may hide its inline selection from Wayland.
+                        // Preserve the tracked prefix and commit only the suffix.
+                        if let Some(completion_suffix) =
+                            candidate_suffix_for_prefix(&cur, &chosen_word)
+                        {
+                            let completion_range = if has_selection {
+                                host_completion_suffix(
+                                    self.im_state.surrounding_text.as_deref(),
+                                    self.im_state.cursor_pos,
+                                    self.im_state.anchor_pos,
+                                    &chosen_word,
+                                )
+                                .map(|(_, range)| range)
+                            } else {
+                                None
+                            };
+                            let replacement = format!("{} ", completion_suffix);
+                            tracing::info!(
+                                "suggest prefix completion: cur='{}', chosen='{}', commit='{}'",
+                                cur,
+                                chosen_word,
+                                replacement
+                            );
+                            self.send_text(&replacement);
+                            if let Some((start, end)) = completion_range
+                                && let Some(ref mut text) = self.im_state.surrounding_text
+                                && start <= end
+                                && end <= text.len()
+                                && text.is_char_boundary(start)
+                                && text.is_char_boundary(end)
+                            {
+                                text.replace_range(start..end, &replacement);
+                                let new_cursor = (start + replacement.len()) as u32;
+                                self.im_state.cursor_pos = new_cursor;
+                                self.im_state.anchor_pos = new_cursor;
+                            }
+                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.sync_layout_and_redraw(qh);
+                            return;
+                        }
+
+                        // Replace only the selected browser-completion suffix.
+                        if has_selection
+                            && let Some((completion_suffix, (start, end))) =
+                                host_completion_suffix(
+                                    self.im_state.surrounding_text.as_deref(),
+                                    self.im_state.cursor_pos,
+                                    self.im_state.anchor_pos,
+                                    &chosen_word,
+                                )
+                        {
+                            let replacement = format!("{} ", completion_suffix);
+                            tracing::info!(
+                                "suggest host completion: keep typed prefix, replace selection {}..{} with '{}'",
+                                start,
+                                end,
+                                replacement
+                            );
+                            for ch in replacement.chars() {
+                                if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
+                                    self.send_key_with_modifiers(keycode, shift);
+                                } else {
+                                    self.send_text(&ch.to_string());
+                                }
+                            }
+                            if let Some(ref mut text) = self.im_state.surrounding_text
+                                && start <= end
+                                && end <= text.len()
+                                && text.is_char_boundary(start)
+                                && text.is_char_boundary(end)
+                            {
+                                text.replace_range(start..end, &replacement);
+                                let new_cursor = (start + replacement.len()) as u32;
+                                self.im_state.cursor_pos = new_cursor;
+                                self.im_state.anchor_pos = new_cursor;
+                            }
+                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.sync_layout_and_redraw(qh);
+                            return;
+                        }
+
                         // A selected host completion must still be replaced even
                         // when it happens to equal our chosen word: the typed
                         // prefix remains outside the host's selected suffix.
@@ -2728,14 +2809,7 @@ impl TouchHandler for WaylandState {
     }
 }
 
-/// Determine the word range and number of backspace keypresses needed for a
-/// suggestion replacement.
-///
-/// Host inline completion is represented by a selection in surrounding text:
-/// the typed prefix is before the selection and the predicted suffix is inside
-/// it. One backspace removes that selection, then one backspace is needed for
-/// each prefix character. Keeping this as keypresses matches the virtual
-/// keyboard path used for Chromium/Ozone clients.
+/// Return backspaces and an optional text range for a suggestion replacement.
 pub fn calculate_replacement_target(
     current_word: &str,
     surrounding_text: Option<&str>,
@@ -2752,8 +2826,7 @@ pub fn calculate_replacement_target(
     let end = cursor.max(anchor);
 
     if start != end {
-        // Inline completions can contain punctuation (for example a URL), so
-        // whitespace is the safe token boundary for the selected host text.
+        // Use whitespace as the token boundary so URLs remain intact.
         let token_start = text[..start]
             .char_indices()
             .rev()
@@ -2771,8 +2844,7 @@ pub fn calculate_replacement_target(
             .find(|(_, ch)| !ch.is_alphabetic() && *ch != '\'')
             .map_or(0, |(index, ch)| index + ch.len_utf8());
         let app_word = &before[word_start..];
-        // A delayed surrounding-text echo may contain a shorter prefix than
-        // the locally tracked word. Do not trust it for deletion in that case.
+        // Ignore delayed echoes that are shorter prefixes of the tracked word.
         if !app_word.is_empty()
             && (current_word.starts_with(app_word) || app_word.eq_ignore_ascii_case(current_word))
         {
@@ -2781,6 +2853,47 @@ pub fn calculate_replacement_target(
     }
 
     (current_word.chars().count(), None)
+}
+
+/// Return the candidate suffix when it extends the typed prefix.
+pub fn candidate_suffix_for_prefix(current_word: &str, chosen_word: &str) -> Option<String> {
+    if current_word.is_empty() {
+        return None;
+    }
+
+    let prefix_len = current_word.chars().count();
+    let candidate_prefix = chosen_word.chars().take(prefix_len).collect::<String>();
+    if !candidate_prefix.eq_ignore_ascii_case(current_word) {
+        return None;
+    }
+
+    Some(chosen_word.chars().skip(prefix_len).collect())
+}
+
+/// Return the suffix and selected range reported by the host.
+pub fn host_completion_suffix(
+    surrounding_text: Option<&str>,
+    cursor_pos: u32,
+    anchor_pos: u32,
+    chosen_word: &str,
+) -> Option<(String, (usize, usize))> {
+    let text = surrounding_text?;
+    let cursor = text.floor_char_boundary((cursor_pos as usize).min(text.len()));
+    let anchor = text.floor_char_boundary((anchor_pos as usize).min(text.len()));
+    if cursor == anchor {
+        return None;
+    }
+
+    let selection_start = cursor.min(anchor);
+    let selection_end = cursor.max(anchor);
+    let token_start = text[..selection_start]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map_or(0, |(index, ch)| index + ch.len_utf8());
+    let typed_prefix = &text[token_start..selection_start];
+    let suffix = candidate_suffix_for_prefix(typed_prefix, chosen_word)?;
+    Some((suffix, (selection_start, selection_end)))
 }
 
 /// Linux evdev keycode mapping for US QWERTY virtual keyboard fallback
@@ -2992,5 +3105,46 @@ mod state_tests {
             super::calculate_replacement_target("w", Some("visit www.youtube.com"), 21, 7);
         assert_eq!(count, 2);
         assert_eq!(range, Some((6, 21)));
+    }
+
+    #[test]
+    fn test_host_completion_suffix_keeps_typed_prefix() {
+        let result =
+            super::host_completion_suffix(Some("www.youtube.com"), 1, 15, "well");
+        assert_eq!(result, Some(("ell".to_string(), (1, 15))));
+    }
+
+    #[test]
+    fn test_host_completion_suffix_handles_reversed_selection() {
+        let result = super::host_completion_suffix(Some("www.youtube.com"), 15, 1, "we");
+        assert_eq!(result, Some(("e".to_string(), (1, 15))));
+    }
+
+    #[test]
+    fn test_host_completion_suffix_rejects_unrelated_candidate() {
+        assert_eq!(
+            super::host_completion_suffix(Some("www.youtube.com"), 1, 15, "hello"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_candidate_suffix_for_prefix_without_surrounding_text() {
+        assert_eq!(
+            super::candidate_suffix_for_prefix("w", "well"),
+            Some("ell".to_string())
+        );
+        assert_eq!(
+            super::candidate_suffix_for_prefix("w", "we"),
+            Some("e".to_string())
+        );
+    }
+
+    #[test]
+    fn test_candidate_suffix_for_prefix_rejects_nonmatching_candidate() {
+        assert_eq!(
+            super::candidate_suffix_for_prefix("w", "hello"),
+            None
+        );
     }
 }

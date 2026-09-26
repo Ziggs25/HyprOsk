@@ -34,9 +34,14 @@ instead of creating an unusable input-method object.
 5. Focus a GTK, Qt, Chromium/Helium, and Firefox text field. The daemon log
    should report `input-method-v2 (read/write)` while the field is active and
    should return to the virtual-keyboard fallback after deactivation.
-6. Exercise the browser inline-completion case (`w` → `www.youtube.com`) and
-   replacement after deleting characters. The entire predicted selection must
-   be replaced without leaving the typed prefix behind.
+6. Exercise the browser inline-completion case (`w` → `www.youtube.com`). Tap
+   an OSK candidate such as `we` or `well`; the field must become exactly
+   `we` or `well`, never `wwe` or `wwell`. Repeat after deleting characters.
 
 If a daemon was killed abruptly, start the next one normally. HyprOsk detects
 and reclaims the stale IPC socket.
+
+## Comment style
+
+Keep source comments short and concrete. Explain one reason or invariant; do
+not narrate code that is already clear.
