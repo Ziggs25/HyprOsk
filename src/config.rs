@@ -111,6 +111,15 @@ pub struct BehaviorConfig {
     pub repeat_delay_ms: u64,
     /// Repeat rate in ms
     pub repeat_rate_ms: u64,
+    /// Read surrounding text from input-method-v2. Defaults to false so that
+    /// buggy browser/Helium host text readback does not interfere with
+    /// typing, while preserving input-method commits and virtual-keyboard writes.
+    #[serde(default = "default_false")]
+    pub surrounding_text_readback: bool,
+}
+
+fn default_false() -> bool {
+    false
 }
 
 impl Default for BehaviorConfig {
@@ -125,6 +134,7 @@ impl Default for BehaviorConfig {
             long_press_ms: 400,
             repeat_delay_ms: 350,
             repeat_rate_ms: 45,
+            surrounding_text_readback: false,
         }
     }
 }

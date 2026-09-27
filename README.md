@@ -153,6 +153,7 @@ touch_only = false         # if true, auto-show only when focus was triggered by
 long_press_ms = 400
 repeat_delay_ms = 350
 repeat_rate_ms = 45
+surrounding_text_readback = false # default false: avoids buggy browser/host text readback
 feedback_command = ""     # optional: e.g. "paplay /usr/share/sounds/click.ogg"
 
 [theme]
@@ -175,10 +176,15 @@ opacity = 0.95
 ## Text exchange and app coverage
 
 HyprOsk detects and reports the text protocols exposed by the compositor at
-startup. Its readable path is `zwp_input_method_v2`: when the compositor and
-focused app support it, HyprOsk receives surrounding text, cursor position, and
-selection state. This enables reliable suggestions and replacement, including
-browser inline completions.
+startup. Its text insertion path is `zwp_input_method_v2`: when the compositor and
+focused app support it, HyprOsk commits text cleanly using `commit_string`.
+
+By default, host surrounding-text readback is disabled (`surrounding_text_readback = false`
+in `config.toml`) to prevent buggy browser (e.g. Helium/Chromium) readback and focus races
+from corrupting the OSK suggestion state. In this mode, HyprOsk continues to commit text
+cleanly over `zwp_input_method_v2` and fall back to `zwp_virtual_keyboard_v1`, without
+reading host text snapshots. Users who want host text readback can explicitly opt in with
+`surrounding_text_readback = true`.
 
 The `zwp_text_input_v3` global is also probed for diagnostics. It is the
 application-to-compositor side of the Wayland text-input handshake; merely

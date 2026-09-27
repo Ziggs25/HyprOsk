@@ -140,6 +140,17 @@ impl SuggestEngine {
             self.current_word.clear();
             self.clear();
         } else if let Some(last_word) = words.last().cloned() {
+            // Stale post-commit echo: if next-word prediction is active and the
+            // surrounding snapshot reports an unspaced prefix of the word just
+            // committed, ignore it so the optimistic selection state is not reverted.
+            if self.is_next_word_mode
+                && self
+                    .word_history
+                    .last()
+                    .map_or(false, |last| last.starts_with(&last_word))
+            {
+                return;
+            }
             // Lagging prefix echo: Chromium may deliver stale surrounding text
             // (e.g. 'b' arriving after 'r' was typed for 'br'). If the
             // surrounding word is a strict prefix of the actively typed word,

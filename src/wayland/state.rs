@@ -103,6 +103,7 @@ pub struct WaylandState {
     pub last_input_at: Option<Instant>,
     pub last_touch_at: Option<Instant>,
     pub last_workspace_switch_at: Option<Instant>,
+    pub last_arrow_at: Option<Instant>,
 
     // Reusable SHM buffers (ring of IN_FLIGHT_BUFFERS slots). Buffers are
     // reused across frames once the compositor releases them; the pool never
@@ -244,6 +245,7 @@ impl WaylandState {
             last_input_at: None,
             last_touch_at: None,
             last_workspace_switch_at: None,
+            last_arrow_at: None,
             pending_mods: 0,
             held_mods: 0,
             held_mod_chorded: 0,
@@ -314,14 +316,21 @@ impl WaylandState {
         let input_method_bound = self.input_method.is_some();
         let input_method_active = self.im_state.is_active.load(Ordering::SeqCst);
         tracing::info!(
-            "Text input capabilities: input_method_v2={} text_input_v3={} virtual_keyboard_v1={} input_method_bound={} input_method_active={} active_source={}",
+            "Text input capabilities: input_method_v2={} text_input_v3={} virtual_keyboard_v1={} surrounding_text_readback={} input_method_bound={} input_method_active={} active_source={}",
             self.text_input_capabilities.input_method_v2,
             self.text_input_capabilities.text_input_v3,
             self.text_input_capabilities.virtual_keyboard_v1,
+            self.config.behavior.surrounding_text_readback,
             input_method_bound,
             input_method_active,
-            self.active_text_input_source().label(),
+            self.active_text_input_source()
+                .label_with_readback(self.config.behavior.surrounding_text_readback),
         );
+        if !self.config.behavior.surrounding_text_readback {
+            tracing::info!(
+                "surrounding_text_readback=false: host surrounding text readback is disabled (write-only mode)"
+            );
+        }
         if self.text_input_capabilities.input_method_v2 && input_method_bound && !input_method_active {
             tracing::info!(
                 "Input-method-v2 is ready; waiting for a focused text field to activate it"
@@ -1581,6 +1590,7 @@ impl WaylandState {
 
         match action {
             KeyAction::Text(text) => {
+                self.last_arrow_at = None;
                 let has_command_mods = ((self.pending_mods | self.held_mods)
                     & (Self::MOD_CTRL | Self::MOD_ALT | Self::MOD_SUPER))
                     != 0;
@@ -1840,12 +1850,24 @@ impl WaylandState {
             }
             KeyAction::ArrowUp => {
                 self.send_arrow_up();
+                self.last_arrow_at = Some(Instant::now());
+                self.suggest_engine.clear();
+                self.im_state.surrounding_text = None;
+                self.im_state.cursor_pos = 0;
+                self.im_state.anchor_pos = 0;
+                self.sync_layout_and_redraw(qh);
                 self.repeat_key = Some(KeyAction::ArrowUp);
                 self.repeat_start = Some(Instant::now());
                 self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::ArrowDown => {
                 self.send_arrow_down();
+                self.last_arrow_at = Some(Instant::now());
+                self.suggest_engine.clear();
+                self.im_state.surrounding_text = None;
+                self.im_state.cursor_pos = 0;
+                self.im_state.anchor_pos = 0;
+                self.sync_layout_and_redraw(qh);
                 self.repeat_key = Some(KeyAction::ArrowDown);
                 self.repeat_start = Some(Instant::now());
                 self.last_repeat_at = Some(Instant::now());
@@ -1916,6 +1938,13 @@ impl WaylandState {
             self.send_space();
         }
 
+        if let Some(row) = self.layout.rows.get(r_idx)
+            && let Some(key) = row.keys.get(k_idx)
+            && matches!(key.action, KeyAction::ArrowUp | KeyAction::ArrowDown)
+        {
+            self.last_arrow_at = Some(Instant::now());
+        }
+
         self.repeat_key = None;
         self.repeat_start = None;
         self.last_repeat_at = None;
@@ -1980,9 +2009,21 @@ impl WaylandState {
                         }
                         KeyAction::ArrowUp => {
                             self.send_arrow_up();
+                            self.last_arrow_at = Some(Instant::now());
+                            self.suggest_engine.clear();
+                            self.im_state.surrounding_text = None;
+                            self.im_state.cursor_pos = 0;
+                            self.im_state.anchor_pos = 0;
+                            self.sync_layout_and_redraw(qh);
                         }
                         KeyAction::ArrowDown => {
                             self.send_arrow_down();
+                            self.last_arrow_at = Some(Instant::now());
+                            self.suggest_engine.clear();
+                            self.im_state.surrounding_text = None;
+                            self.im_state.cursor_pos = 0;
+                            self.im_state.anchor_pos = 0;
+                            self.sync_layout_and_redraw(qh);
                         }
                         _ => {}
                     }
@@ -2083,7 +2124,7 @@ impl WaylandState {
         tracing::info!(
             "send_text '{}' source={} has_mods={} surrounding={:?} cursor={} anchor={}",
             text,
-            source.label(),
+            source.label_with_readback(self.config.behavior.surrounding_text_readback),
             has_mods,
             self.im_state.surrounding_text,
             self.im_state.cursor_pos,

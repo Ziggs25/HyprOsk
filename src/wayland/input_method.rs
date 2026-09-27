@@ -1,3 +1,4 @@
+use crate::layout::key::KeyAction;
 use crate::wayland::state::WaylandState;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,8 +24,18 @@ pub enum TextInputSource {
 
 impl TextInputSource {
     pub const fn label(self) -> &'static str {
+        self.label_with_readback(true)
+    }
+
+    pub const fn label_with_readback(self, readback_enabled: bool) -> &'static str {
         match self {
-            Self::InputMethodV2 => "input-method-v2 (read/write)",
+            Self::InputMethodV2 => {
+                if readback_enabled {
+                    "input-method-v2 (read/write)"
+                } else {
+                    "input-method-v2 (write-only, readback disabled)"
+                }
+            }
             Self::VirtualKeyboard => "virtual-keyboard (write-only)",
             Self::Unavailable => "unavailable",
         }
@@ -102,7 +113,11 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
     ) {
         match event {
             zwp_input_method_v2::Event::Activate => {
-                tracing::info!("Received text-input Activate event -> Auto-showing HyprOsk");
+                let readback = state.config.behavior.surrounding_text_readback;
+                tracing::info!(
+                    "Received text-input Activate event -> Auto-showing HyprOsk (readback={})",
+                    if readback { "enabled" } else { "disabled" }
+                );
                 state.im_state.is_active.store(true, Ordering::SeqCst);
                 state.im_state.last_content_purpose = None;
                 state.im_state.surrounding_text = None;
@@ -135,6 +150,27 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
                 cursor,
                 anchor,
             } => {
+                if !state.config.behavior.surrounding_text_readback {
+                    state.im_state.surrounding_text = None;
+                    state.im_state.cursor_pos = 0;
+                    state.im_state.anchor_pos = 0;
+                    return;
+                }
+                // Discard host surrounding text echoes when ArrowUp/Down
+                // is repeating or was recently pressed/released (within 500ms).
+                if matches!(
+                    state.repeat_key.as_ref(),
+                    Some(KeyAction::ArrowUp | KeyAction::ArrowDown)
+                ) || state
+                    .last_arrow_at
+                    .map_or(false, |t| t.elapsed() < std::time::Duration::from_millis(500))
+                {
+                    state.suggest_engine.clear();
+                    state.im_state.surrounding_text = None;
+                    state.im_state.cursor_pos = 0;
+                    state.im_state.anchor_pos = 0;
+                    return;
+                }
                 let has_selection = cursor != anchor;
                 // For an inline completion, the host reports the typed prefix
                 // and the predicted suffix as a selection. The lower endpoint
