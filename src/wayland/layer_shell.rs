@@ -49,14 +49,14 @@ pub fn create_layer_surface(
         None,
     );
 
-    let (target_w, target_h, margin_b, margin_h) = if let Some(ref custom) = state.custom_layout {
-        let h = custom.height.unwrap_or(state.config.general.height);
+    let target_h = state.effective_keyboard_height();
+    let (target_w, margin_b, margin_h) = if let Some(ref custom) = state.custom_layout {
         let w = custom.width.unwrap_or(0);
         let mb = custom.margin_bottom.unwrap_or(state.config.general.margin_bottom);
         let mh = if custom.width.is_some() { 0 } else { state.config.general.margin_horizontal };
-        (w, h, mb, mh)
+        (w, mb, mh)
     } else {
-        (0, state.config.general.height, state.config.general.margin_bottom, state.config.general.margin_horizontal)
+        (0, state.config.general.margin_bottom, state.config.general.margin_horizontal)
     };
 
     state.height = target_h;
@@ -70,11 +70,12 @@ pub fn create_layer_surface(
         layer_surface.set_margin(0, margin_h, margin_b, margin_h);
     }
     
-    if state.config.general.exclusive_zone {
-        layer_surface.set_exclusive_zone(state.height as i32);
+    let zone = state.active_exclusive_zone.unwrap_or(if state.config.general.exclusive_zone {
+        state.height as i32
     } else {
-        layer_surface.set_exclusive_zone(0);
-    }
+        0
+    });
+    layer_surface.set_exclusive_zone(zone);
 
     // CRITICAL: NEVER request keyboard interactivity on an OSK layer surface
     // This allows touch events while preserving keyboard focus on the client app!

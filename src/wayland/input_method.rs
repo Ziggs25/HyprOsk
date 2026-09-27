@@ -126,7 +126,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
                 state.im_state.source = TextInputSource::InputMethodV2;
                 state.suggest_engine.clear();
                 if state.config.behavior.auto_show && state.allow_auto_show() {
-                    state.show_keyboard(qh);
+                    state.show_keyboard_with_auto_placement(qh);
                     // If triggered by auto-show, allow auto-hide on blur
                     state.manually_shown = false;
                 }

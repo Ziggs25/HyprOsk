@@ -92,6 +92,7 @@ pub struct WaylandState {
     pub is_configured: bool,
     pub is_visible: bool,
     pub manually_shown: bool,
+    pub active_exclusive_zone: Option<i32>,
     pub is_running: bool,
     pub width: u32,
     pub height: u32,
@@ -190,7 +191,21 @@ pub struct HoldPreview {
     pub label: String,
 }
 
+/// Compute effective keyboard height: custom layout height when present, otherwise general height.
+pub fn compute_effective_keyboard_height(custom_height: Option<u32>, general_height: u32) -> u32 {
+    custom_height.unwrap_or(general_height)
+}
+
 impl WaylandState {
+    /// Returns the effective keyboard height: custom_layout.height when present,
+    /// otherwise config.general.height.
+    pub fn effective_keyboard_height(&self) -> u32 {
+        compute_effective_keyboard_height(
+            self.custom_layout.as_ref().and_then(|c| c.height),
+            self.config.general.height,
+        )
+    }
+
     pub fn new(
         registry_state: RegistryState,
         compositor_state: CompositorState,
@@ -201,10 +216,6 @@ impl WaylandState {
         shm: &Shm,
         config: Config,
     ) -> Self {
-        let pool = SlotPool::new((1000 * config.general.height.max(1) * 4) as usize, shm)
-            .expect("Failed to create SHM slot pool");
-        let theme = Theme::from(&config.theme);
-        let height = config.general.height;
         let layout_mode =
             LayoutMode::parse_mode(&config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
         let custom_layout = config
@@ -213,6 +224,13 @@ impl WaylandState {
             .as_deref()
             .or(Some(config.general.layout_mode.as_str()))
             .and_then(|f| CustomLayoutFile::load_from_name_or_path(f).ok());
+        let height = compute_effective_keyboard_height(
+            custom_layout.as_ref().and_then(|c| c.height),
+            config.general.height,
+        );
+        let pool = SlotPool::new((1000 * height.max(1) * 4) as usize, shm)
+            .expect("Failed to create SHM slot pool");
+        let theme = Theme::from(&config.theme);
         let layout = if let Some(ref custom) = custom_layout {
             custom.to_keyboard_layout(LayerId::Lower, &[], false)
         } else {
@@ -237,6 +255,7 @@ impl WaylandState {
             is_configured: false,
             is_visible: false,
             manually_shown: false,
+            active_exclusive_zone: None,
             is_running: true,
             width: 1000,
             height,
@@ -346,21 +365,99 @@ impl WaylandState {
         }
     }
 
+    /// Perform best-effort cursor-position inference for auto-show.
+    ///
+    /// If the sampled cursor Y coordinate lies in the upper half of the monitor
+    /// containing that point, HyprOsk is presented as a floating overlay (exclusive_zone=0)
+    /// to avoid resizing/shifting windows when the input field is far above the keyboard.
+    ///
+    /// If in the lower half, HyprOsk docks and reserves space (exclusive_zone=height)
+    /// so the compositor tiles/shifts the window upward, preventing the keyboard from
+    /// obscuring the input field.
+    ///
+    /// If the cursor position cannot be obtained or validated (e.g. non-Hyprland compositor,
+    /// socket timeout, malformed output), falls back safely to the user's configured exclusivity.
+    pub fn infer_auto_placement_exclusivity(&self) -> (bool, i32) {
+        let eff_height = self.effective_keyboard_height();
+        let infer_res = crate::hyprland::infer_cursor_position_placement();
+        if let Some(ref res) = infer_res {
+            let is_upper = res.position == crate::hyprland::CursorVerticalPosition::UpperHalf;
+            let (exclusive, zone) = crate::hyprland::resolve_placement_exclusivity(
+                Some(res),
+                self.config.general.exclusive_zone,
+                eff_height,
+            );
+            tracing::info!(
+                "Auto-placement best-effort inference: cursor=({:.1}, {:.1}) on monitor '{}' ({:.0}x{:.0} at {:.0},{:.0}), rel_y={:.2} -> {} -> {}",
+                res.cursor.0,
+                res.cursor.1,
+                res.monitor_name,
+                res.monitor_rect.2,
+                res.monitor_rect.3,
+                res.monitor_rect.0,
+                res.monitor_rect.1,
+                res.rel_y,
+                if is_upper { "upper half" } else { "lower half" },
+                if exclusive { "docked (exclusive_zone=height)" } else { "floating overlay (exclusive_zone=0)" }
+            );
+            (exclusive, zone)
+        } else {
+            let (exclusive, zone) = crate::hyprland::resolve_placement_exclusivity(
+                None,
+                self.config.general.exclusive_zone,
+                eff_height,
+            );
+            tracing::info!(
+                "Auto-placement: best-effort cursor inference unavailable; falling back to configured exclusive_zone={}",
+                exclusive
+            );
+            (exclusive, zone)
+        }
+    }
+
+    /// Automatically show the keyboard on input-method-v2 Activate, using best-effort
+    /// cursor-position inference to dynamically choose between floating overlay and docked.
+    pub fn show_keyboard_with_auto_placement(&mut self, qh: &QueueHandle<Self>) {
+        let (_exclusive, zone) = self.infer_auto_placement_exclusivity();
+        self.show_keyboard_with_zone(qh, zone, false);
+    }
+
+    /// Manually show the keyboard. Respects the configured `exclusive_zone` without override.
     pub fn show_keyboard(&mut self, qh: &QueueHandle<Self>) {
+        let eff_height = self.effective_keyboard_height();
+        let zone = if self.config.general.exclusive_zone {
+            eff_height as i32
+        } else {
+            0
+        };
+        self.show_keyboard_with_zone(qh, zone, true);
+    }
+
+    /// Show the keyboard with an explicit exclusive zone and manual flag.
+    pub fn show_keyboard_with_zone(&mut self, qh: &QueueHandle<Self>, zone: i32, manual: bool) {
         if self.is_visible {
+            // Focus transition: if already visible and not manually shown, update exclusivity
+            if !self.manually_shown && !manual && self.active_exclusive_zone != Some(zone) {
+                self.active_exclusive_zone = Some(zone);
+                if let Some(ref surface) = self.layer_surface {
+                    surface.set_exclusive_zone(zone);
+                    surface.commit();
+                }
+            }
             return;
         }
-        tracing::info!("Showing HyprOsk on-screen keyboard");
+        tracing::info!(
+            "Showing HyprOsk on-screen keyboard (exclusive_zone={}, manual={})",
+            zone,
+            manual
+        );
         self.is_visible = true;
-        self.manually_shown = true;
+        self.manually_shown = manual;
+        self.active_exclusive_zone = Some(zone);
         self.init_surface(qh);
 
         if let Some(ref surface) = self.layer_surface {
-            if self.config.general.exclusive_zone {
-                surface.set_exclusive_zone(self.height as i32);
-            } else {
-                surface.set_exclusive_zone(0);
-            }
+            surface.set_exclusive_zone(zone);
             surface.commit();
         }
 
@@ -382,6 +479,7 @@ impl WaylandState {
         self.is_visible = false;
         self.is_configured = false;
         self.manually_shown = false;
+        self.active_exclusive_zone = None;
         if let Some(ref surface) = self.layer_surface {
             surface.set_exclusive_zone(0);
             surface.wl_surface().attach(None, 0, 0);
@@ -474,9 +572,10 @@ impl WaylandState {
 
     pub fn show_keyboard_with_exclusivity(&mut self, qh: &QueueHandle<Self>, exclusive: bool) {
         self.config.general.exclusive_zone = exclusive;
+        self.active_exclusive_zone = None;
         if self.is_visible {
             if let Some(ref surface) = self.layer_surface {
-                let zone = if exclusive { self.height as i32 } else { 0 };
+                let zone = if exclusive { self.effective_keyboard_height() as i32 } else { 0 };
                 surface.set_exclusive_zone(zone);
                 surface.commit();
             }
@@ -489,8 +588,9 @@ impl WaylandState {
         if self.is_visible {
             if self.config.general.exclusive_zone != exclusive {
                 self.config.general.exclusive_zone = exclusive;
+                self.active_exclusive_zone = None;
                 if let Some(ref surface) = self.layer_surface {
-                    let zone = if exclusive { self.height as i32 } else { 0 };
+                    let zone = if exclusive { self.effective_keyboard_height() as i32 } else { 0 };
                     surface.set_exclusive_zone(zone);
                     surface.commit();
                 }
@@ -504,13 +604,14 @@ impl WaylandState {
 
     pub fn set_exclusivity(&mut self, _qh: &QueueHandle<Self>, exclusive: bool) {
         self.config.general.exclusive_zone = exclusive;
+        self.active_exclusive_zone = None;
         tracing::info!(
             "HyprOsk exclusivity set: exclusive_zone = {}",
             self.config.general.exclusive_zone
         );
         if let Some(ref surface) = self.layer_surface {
             let zone = if self.is_visible && self.config.general.exclusive_zone {
-                self.height as i32
+                self.effective_keyboard_height() as i32
             } else {
                 0
             };
@@ -521,13 +622,14 @@ impl WaylandState {
 
     pub fn toggle_exclusivity(&mut self, _qh: &QueueHandle<Self>) {
         self.config.general.exclusive_zone = !self.config.general.exclusive_zone;
+        self.active_exclusive_zone = None;
         tracing::info!(
             "HyprOsk exclusivity toggled: exclusive_zone = {}",
             self.config.general.exclusive_zone
         );
         if let Some(ref surface) = self.layer_surface {
             let zone = if self.is_visible && self.config.general.exclusive_zone {
-                self.height as i32
+                self.effective_keyboard_height() as i32
             } else {
                 0
             };
@@ -540,7 +642,6 @@ impl WaylandState {
         tracing::info!("Reloading HyprOsk configuration");
         let new_config = Config::load_or_create(None);
         self.theme = Theme::from(&new_config.theme);
-        self.height = new_config.general.height;
         self.layout_mode =
             LayoutMode::parse_mode(&new_config.general.layout_mode).unwrap_or(LayoutMode::Desktop);
         self.custom_layout = new_config
@@ -550,6 +651,8 @@ impl WaylandState {
             .or(Some(new_config.general.layout_mode.as_str()))
             .and_then(|f| CustomLayoutFile::load_from_name_or_path(f).ok());
         self.config = new_config;
+        self.height = self.effective_keyboard_height();
+        self.active_exclusive_zone = None;
         self.sync_surface_geometry();
 
         if self.is_visible && self.is_configured {
@@ -561,9 +664,9 @@ impl WaylandState {
         if let Some(ref surface) = self.layer_surface {
             use smithay_client_toolkit::shell::wlr_layer::Anchor;
 
-            let (target_w, target_h, margin_b, margin_h) =
+            let target_h = self.effective_keyboard_height();
+            let (target_w, margin_b, margin_h) =
                 if let Some(ref custom) = self.custom_layout {
-                    let h = custom.height.unwrap_or(self.config.general.height);
                     let w = custom.width.unwrap_or(0);
                     let mb = custom
                         .margin_bottom
@@ -573,11 +676,10 @@ impl WaylandState {
                     } else {
                         self.config.general.margin_horizontal
                     };
-                    (w, h, mb, mh)
+                    (w, mb, mh)
                 } else {
                     (
                         0,
-                        self.config.general.height,
                         self.config.general.margin_bottom,
                         self.config.general.margin_horizontal,
                     )
@@ -594,8 +696,22 @@ impl WaylandState {
                 surface.set_margin(0, margin_h, margin_b, margin_h);
             }
 
-            let zone = if self.is_visible && self.config.general.exclusive_zone {
-                self.height as i32
+            let zone = if self.is_visible {
+                match self.active_exclusive_zone {
+                    Some(0) => 0,
+                    Some(_) => {
+                        let new_zone = self.height as i32;
+                        self.active_exclusive_zone = Some(new_zone);
+                        new_zone
+                    }
+                    None => {
+                        if self.config.general.exclusive_zone {
+                            self.height as i32
+                        } else {
+                            0
+                        }
+                    }
+                }
             } else {
                 0
             };
@@ -3187,5 +3303,13 @@ mod state_tests {
             super::candidate_suffix_for_prefix("w", "hello"),
             None
         );
+    }
+
+    #[test]
+    fn test_compute_effective_keyboard_height() {
+        // When custom_layout specifies a height, it overrides general.height
+        assert_eq!(super::compute_effective_keyboard_height(Some(470), 360), 470);
+        // When custom_layout has no height, it falls back to general.height
+        assert_eq!(super::compute_effective_keyboard_height(None, 360), 360);
     }
 }

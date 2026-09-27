@@ -50,6 +50,44 @@ instead of creating an unusable input-method object.
    surrounding-text snapshots. When explicitly enabled (`surrounding_text_readback = true`),
    surrounding text is read only when supported by the host.
 
+## Cursor-position auto-placement check
+
+On `input-method-v2` auto-show (`Activate`), HyprOsk samples Hyprland's global cursor
+coordinates via Hyprland IPC as a best-effort touch proxy to infer whether the active
+input field is located in the upper or lower half of the monitor:
+
+- **Upper half (`rel_y < 0.5`)**: HyprOsk displays as a **floating overlay** (`exclusive_zone = 0`)
+  and requests no reserved area. Verify the actual window behavior on your Hyprland layout.
+- **Lower half (`rel_y >= 0.5`)**: HyprOsk displays as **docked** (`exclusive_zone = effective_keyboard_height`).
+  HyprOsk requests space reservation from the compositor via layer-shell; actual window adjustment
+  or shifting is compositor- and layout-dependent (verify how Hyprland adjusts your specific active
+  workspace and tiled/floating window layout).
+
+### Manual Verification Procedure
+
+1. **Top-half touch / click**:
+   - Tap or click into an input field located in the upper half of your monitor (such as a browser URL/search bar near the top edge).
+   - Verify HyprOsk appears as a floating overlay; observe whether the underlying window moves.
+   - Check the daemon log:
+     ```
+     Auto-placement best-effort inference: cursor=(X, Y) on monitor '...' (WxH at X,Y), rel_y=0.XX -> upper half -> floating overlay (exclusive_zone=0)
+     ```
+2. **Bottom-half touch / click**:
+   - Tap or click into an input field located in the lower half of your monitor (such as a comment box or bottom terminal prompt).
+   - Verify HyprOsk requests docked space reservation (`exclusive_zone = effective_keyboard_height`), and verify actual Hyprland window layout adjustment.
+   - Check the daemon log:
+     ```
+     Auto-placement best-effort inference: cursor=(X, Y) on monitor '...' (WxH at X,Y), rel_y=0.XX -> lower half -> docked (exclusive_zone=height)
+     ```
+3. **Compare with `hyprctl cursorpos`**:
+   - Run `hyprctl cursorpos` in a terminal. Verify whether `cursorpos` follows touch on your setup (behavior can vary across touchscreen drivers and Hyprland versions/configurations) and verify that the logged cursor coordinates match `hyprctl cursorpos`.
+4. **Manual invocations**:
+   - Run `hyprosk show` or `hyprosk toggle` via CLI or shortcut.
+   - Verify that manual show respects the user-configured `exclusive_zone` in `config.toml` directly, without cursor inference override.
+5. **Programmatic / Keyboard focus caveat**:
+   - Verify whether `cursorpos` follows touch on your specific setup. While direct touchscreen taps and mouse clicks generally update cursor coordinates, programmatic focus shifts (e.g. `Tab` key navigation or auto-focusing popups) do not move Hyprland's hardware cursor to the newly focused field. Under programmatic focus, cursor position reflects the last touch/pointer position.
+   - If IPC queries time out, fail (e.g. non-Hyprland compositors), or yield non-finite coordinates / coordinates outside all active monitor rectangles, HyprOsk logs an informational notice (`Auto-placement: best-effort cursor inference unavailable; falling back to configured exclusive_zone=...`) and falls back safely to the configured `exclusive_zone`.
+
 If a daemon was killed abruptly, start the next one normally. HyprOsk detects
 and reclaims the stale IPC socket.
 
