@@ -115,7 +115,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
             zwp_input_method_v2::Event::Activate => {
                 let readback = state.config.behavior.surrounding_text_readback;
                 tracing::info!(
-                    "Received text-input Activate event -> Auto-showing HyprOsk (readback={})",
+                    "Received text-input Activate event (readback={})",
                     if readback { "enabled" } else { "disabled" }
                 );
                 state.im_state.is_active.store(true, Ordering::SeqCst);
@@ -125,10 +125,19 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
                 state.im_state.anchor_pos = 0;
                 state.im_state.source = TextInputSource::InputMethodV2;
                 state.suggest_engine.clear();
-                if state.config.behavior.auto_show && state.allow_auto_show() {
-                    state.show_keyboard_with_auto_placement(qh);
-                    // If triggered by auto-show, allow auto-hide on blur
-                    state.manually_shown = false;
+                if state.config.behavior.auto_show {
+                    if state.allow_auto_show() {
+                        state.show_keyboard_with_auto_placement(qh);
+                        // If triggered by auto-show, allow auto-hide on blur
+                        state.manually_shown = false;
+                    } else {
+                        tracing::info!(
+                            "Auto-show suppressed by policy (folio_mode={}, folio_attached={}, touch_only={})",
+                            state.config.behavior.folio_mode,
+                            state.folio_attached,
+                            state.config.behavior.touch_only
+                        );
+                    }
                 }
             }
             zwp_input_method_v2::Event::Deactivate => {

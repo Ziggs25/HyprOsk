@@ -131,8 +131,11 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         );
     }
     if config.behavior.touch_only {
+        tracing::info!("touch_only enabled: automatic input-method activation requires recent touchscreen input");
+    }
+    if config.behavior.auto_show || config.behavior.touch_only {
         crate::touch::spawn_touch_poller(touch_tx);
-        tracing::info!("touch_only enabled: auto-show only on recent touch input");
+        tracing::info!("Touchscreen monitoring enabled for input source tracking and touch_only gating");
     }
 
     tracing::info!("HyprOsk daemon successfully initialized and running.");
@@ -208,8 +211,8 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         while let Ok(attached) = folio_rx.try_recv() {
             state.on_folio_change(attached, &qh);
         }
-        while let Ok(at) = touch_rx.try_recv() {
-            state.note_touch(at);
+        while let Ok(event) = touch_rx.try_recv() {
+            state.note_touch(event);
         }
 
         // Update hold-preview for long-press secondary visualization (Gboard/HeliBoard style)

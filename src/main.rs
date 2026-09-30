@@ -180,17 +180,23 @@ fn main() -> anyhow::Result<()> {
             println!("{}", resp.trim());
         }
         Some(Commands::Status) => {
-            let attached = hyprosk::folio::physical_keyboard_attached();
-            let tablet = hyprosk::folio::tablet_mode_active();
-            let evdev = hyprosk::folio::evdev_keyboard_present();
-            let proc_kbd = hyprosk::folio::proc_keyboard_present();
-            println!("tablet_mode (SW_TABLET_MODE): {tablet}");
-            println!("evdev letter-key keyboard:   {evdev}");
-            println!("/proc kbd-letter keyboard:   {proc_kbd}");
-            println!("folio attached (verdict):    {attached}");
+            // One snapshot so the printed sources and the verdict cannot come
+            // from different points in time (matters right after resume).
+            let status = hyprosk::folio::FolioStatus::detect();
+            println!("folio USB (044e:1218):       {}", status.usb_folio);
+            println!("tablet_mode (SW_TABLET_MODE): {}", status.tablet_mode);
+            println!("evdev letter-key keyboard:   {}", status.evdev_keyboard);
+            println!("/proc kbd-letter keyboard:   {}", status.proc_keyboard);
+            println!("folio attached (verdict):    {}", status.attached);
+            println!("folio source:                {}", status.source.label());
             let config = hyprosk::config::Config::load_or_create(cli.config.as_deref());
             println!("folio_mode (config):         {}", config.behavior.folio_mode);
-            println!("auto-show will be:           {}", if !config.behavior.folio_mode || !attached { "ENABLED" } else { "SUPPRESSED" });
+            println!("auto-show will be:           {}", if !config.behavior.folio_mode || !status.attached { "ENABLED" } else { "SUPPRESSED" });
+            if config.behavior.folio_mode && status.source == hyprosk::folio::FolioSource::UsbFolio {
+                println!("note: 044e:1218 stays powered when the folio is folded 360 degrees,");
+                println!("      so this device cannot be told apart from laptop posture by USB ID.");
+                println!("      Use 'hyprosk toggle' or 'hyprosk hide' in that posture.");
+            }
         }
         Some(Commands::Quit) => {
             let resp = hyprosk::ipc::IpcServer::send_command("quit")?;

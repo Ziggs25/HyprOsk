@@ -122,7 +122,7 @@ hyprosk layer upper      # switch to upper case
 hyprosk layer symbols    # symbols page 1
 hyprosk layer symbols2   # symbols page 2
 hyprosk clipboard    # toggle clipboard history view
-hyprosk status       # folio/tablet/keyboard detection + current auto-show state
+hyprosk status       # folio USB, posture switch, keyboard sources + verdict
 hyprosk quit         # stop daemon
 ```
 

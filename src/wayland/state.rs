@@ -103,6 +103,8 @@ pub struct WaylandState {
     pub last_input_is_touch: bool,
     pub last_input_at: Option<Instant>,
     pub last_touch_at: Option<Instant>,
+    /// Normalized Y coordinate from the most recent physical touchscreen contact.
+    pub last_touch_relative_y: Option<f64>,
     pub last_workspace_switch_at: Option<Instant>,
     pub last_arrow_at: Option<Instant>,
 
@@ -263,6 +265,7 @@ impl WaylandState {
             last_input_is_touch: false,
             last_input_at: None,
             last_touch_at: None,
+            last_touch_relative_y: None,
             last_workspace_switch_at: None,
             last_arrow_at: None,
             pending_mods: 0,
@@ -379,8 +382,68 @@ impl WaylandState {
     /// socket timeout, malformed output), falls back safely to the user's configured exclusivity.
     pub fn infer_auto_placement_exclusivity(&self) -> (bool, i32) {
         let eff_height = self.effective_keyboard_height();
+
+        // Touchscreens may not update Hyprland's pointer position. Use the raw
+        // touchscreen Y coordinate when available instead of the stale cursor.
+        let is_recent_touch = self
+            .last_touch_at
+            .is_some_and(|at| at.elapsed().as_millis() < 1500);
+
+        if is_recent_touch {
+            if let Some(rel_y) = self.last_touch_relative_y {
+                let is_upper = rel_y < 0.5;
+                let exclusive = !is_upper;
+                let zone = if exclusive { eff_height as i32 } else { 0 };
+                tracing::info!(
+                    "Auto-placement: touchscreen rel_y={:.2} -> {} -> {} (exclusive_zone={})",
+                    rel_y,
+                    if is_upper { "upper half" } else { "lower half" },
+                    if exclusive { "docked" } else { "floating overlay" },
+                    zone
+                );
+                return (exclusive, zone);
+            }
+
+            let (exclusive, zone) = crate::hyprland::resolve_placement_exclusivity(
+                None,
+                self.config.general.exclusive_zone,
+                eff_height,
+            );
+            tracing::info!(
+                "Auto-placement: touchscreen position unavailable; using configured exclusive_zone={}",
+                zone
+            );
+            return (exclusive, zone);
+        }
+
+        // 2. Pointer-driven activation: sample Hyprland cursor position
         let infer_res = crate::hyprland::infer_cursor_position_placement();
         if let Some(ref res) = infer_res {
+            // Explicitly treat the known unpositioned compositor center sentinel
+            // (e.g. 720.0, 480.0 on 1440x960) as unavailable data so placement falls
+            // back to configured exclusivity instead of guessing docked from the default center.
+            let (mx, my, mw, mh) = res.monitor_rect;
+            let center_x = mx + mw / 2.0;
+            let center_y = my + mh / 2.0;
+            let is_unpositioned_sentinel =
+                (res.cursor.0 - center_x).abs() <= 1.0 && (res.cursor.1 - center_y).abs() <= 1.0;
+
+            if is_unpositioned_sentinel {
+                let (exclusive, zone) = crate::hyprland::resolve_placement_exclusivity(
+                    None,
+                    self.config.general.exclusive_zone,
+                    eff_height,
+                );
+                tracing::info!(
+                    "Auto-placement: cursor=({:.1}, {:.1}) is at monitor '{}' unpositioned center sentinel; falling back to configured exclusive_zone={}",
+                    res.cursor.0,
+                    res.cursor.1,
+                    res.monitor_name,
+                    zone
+                );
+                return (exclusive, zone);
+            }
+
             let is_upper = res.position == crate::hyprland::CursorVerticalPosition::UpperHalf;
             let (exclusive, zone) = crate::hyprland::resolve_placement_exclusivity(
                 Some(res),
@@ -388,7 +451,7 @@ impl WaylandState {
                 eff_height,
             );
             tracing::info!(
-                "Auto-placement best-effort inference: cursor=({:.1}, {:.1}) on monitor '{}' ({:.0}x{:.0} at {:.0},{:.0}), rel_y={:.2} -> {} -> {}",
+                "Auto-placement best-effort inference: cursor=({:.1}, {:.1}) on monitor '{}' ({:.0}x{:.0} at {:.0},{:.0}), rel_y={:.2} -> {} -> {} (exclusive_zone={})",
                 res.cursor.0,
                 res.cursor.1,
                 res.monitor_name,
@@ -398,7 +461,8 @@ impl WaylandState {
                 res.monitor_rect.1,
                 res.rel_y,
                 if is_upper { "upper half" } else { "lower half" },
-                if exclusive { "docked (exclusive_zone=height)" } else { "floating overlay (exclusive_zone=0)" }
+                if exclusive { "docked" } else { "floating overlay" },
+                zone
             );
             (exclusive, zone)
         } else {
@@ -409,7 +473,7 @@ impl WaylandState {
             );
             tracing::info!(
                 "Auto-placement: best-effort cursor inference unavailable; falling back to configured exclusive_zone={}",
-                exclusive
+                zone
             );
             (exclusive, zone)
         }
@@ -742,13 +806,15 @@ impl WaylandState {
         self.last_input_at = Some(Instant::now());
         if is_touch {
             self.last_touch_at = Some(Instant::now());
+            self.last_touch_relative_y = None;
         }
     }
 
-    pub fn note_touch(&mut self, at: Instant) {
+    pub fn note_touch(&mut self, event: crate::touch::TouchEvent) {
         self.last_input_is_touch = true;
-        self.last_input_at = Some(at);
-        self.last_touch_at = Some(at);
+        self.last_input_at = Some(event.at);
+        self.last_touch_at = Some(event.at);
+        self.last_touch_relative_y = event.relative_y;
     }
 
     pub fn note_workspace_switch(&mut self) {
@@ -760,16 +826,24 @@ impl WaylandState {
     /// In folio mode this is denied while a physical keyboard is attached;
     /// in touch_only mode only touch triggers are allowed.
     /// Manual shows via `hyprosk show` / `toggle` are not affected.
-    pub fn allow_auto_show(&self) -> bool {
+    pub fn allow_auto_show(&mut self) -> bool {
         if let Some(ws_at) = self.last_workspace_switch_at
             && ws_at.elapsed().as_millis() < 900
         {
             tracing::debug!("suppressing auto-show: workspace switch <900ms ago (ghostty fix)");
             return false;
         }
-        if self.config.behavior.folio_mode && self.folio_attached {
-            tracing::debug!("Folio keyboard attached, suppressing auto-show");
-            return false;
+        if self.config.behavior.folio_mode {
+            // The poller debounces attach transitions. Refresh a negative result
+            // at activation so an already connected folio cannot lose a race.
+            if !self.folio_attached && crate::folio::physical_keyboard_attached() {
+                self.folio_attached = true;
+                tracing::info!("Folio keyboard detected at auto-show; suppressing OSK");
+            }
+            if self.folio_attached {
+                tracing::debug!("Folio keyboard attached, suppressing auto-show");
+                return false;
+            }
         }
         if self.config.behavior.touch_only {
             let recent_touch = self

@@ -9,6 +9,9 @@ const INPUT_TYPE: libc::c_ulong = b'E' as libc::c_ulong;
 const EV_ABS: u32 = 0x03;
 const EV_KEY: u32 = 0x01;
 const BTN_TOUCH: usize = 330;
+const ABS_MT_TRACKING_ID: u16 = 0x39;
+const ABS_Y: u16 = 0x01;
+const ABS_MT_POSITION_Y: u16 = 0x3a;
 
 const PROP_BITMAP_BYTES: usize = 8;
 const INPUT_PROP_POINTER: usize = 0;
@@ -27,6 +30,10 @@ fn eviocgname(len: usize) -> libc::c_ulong {
     (_IOC_READ << 30) | ((len as libc::c_ulong) << 16) | (INPUT_TYPE << 8) | 0x06
 }
 
+fn eviocgabs(code: u16, len: usize) -> libc::c_ulong {
+    (_IOC_READ << 30) | ((len as libc::c_ulong) << 16) | (INPUT_TYPE << 8) | (0x40 + code) as libc::c_ulong
+}
+
 const ABS_BITMAP_BYTES: usize = 16;
 const KEY_BITMAP_BYTES: usize = 96;
 
@@ -36,7 +43,13 @@ fn has_touch_cap(fd: libc::c_int) -> bool {
     let name_ok = unsafe { libc::ioctl(fd, eviocgname(256), name_buf.as_mut_ptr()) } >= 0;
     if name_ok {
         let name = String::from_utf8_lossy(&name_buf).to_lowercase();
-        if name.contains("touchpad") || name.contains("trackpoint") || name.contains("mouse") {
+        if name.contains("touchpad")
+            || name.contains("trackpoint")
+            || name.contains("mouse")
+            || name.contains("pen")
+            || name.contains("stylus")
+            || name.contains("eraser")
+        {
             return false;
         }
     }
@@ -88,17 +101,73 @@ struct InputEvent {
     value: i32,
 }
 
-pub fn spawn_touch_poller(tx: Sender<Instant>) {
-    thread::spawn(move || {
-        let mut devices: Vec<(String, libc::c_int)> = Vec::new();
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct InputAbsInfo {
+    value: i32,
+    minimum: i32,
+    maximum: i32,
+    fuzz: i32,
+    flat: i32,
+    resolution: i32,
+}
 
-        let scan_devices = |devices: &mut Vec<(String, libc::c_int)>| {
+#[derive(Clone, Copy)]
+struct YAxis {
+    code: u16,
+    minimum: i32,
+    maximum: i32,
+}
+
+impl YAxis {
+    fn read(fd: libc::c_int) -> Option<Self> {
+        [ABS_MT_POSITION_Y, ABS_Y].into_iter().find_map(|code| {
+            let mut info = InputAbsInfo::default();
+            // SAFETY: `info` is writable for the full EVIOCGABS result size.
+            let ret = unsafe { libc::ioctl(fd, eviocgabs(code, std::mem::size_of::<InputAbsInfo>()), &mut info) };
+            (ret >= 0 && info.maximum > info.minimum).then_some(Self {
+                code,
+                minimum: info.minimum,
+                maximum: info.maximum,
+            })
+        })
+    }
+
+    fn normalize(self, value: i32) -> Option<f64> {
+        if value < self.minimum || value > self.maximum {
+            return None;
+        }
+        let minimum = self.minimum as f64;
+        let span = self.maximum as f64 - minimum;
+        Some((value as f64 - minimum) / span)
+    }
+}
+
+struct TouchDevice {
+    path: String,
+    fd: libc::c_int,
+    y_axis: Option<YAxis>,
+}
+
+/// A raw touchscreen event used for touch-only gating and vertical placement.
+#[derive(Debug, Clone, Copy)]
+pub struct TouchEvent {
+    pub at: Instant,
+    /// Normalized touch Y position (0.0 at the top, 1.0 at the bottom), when available.
+    pub relative_y: Option<f64>,
+}
+
+pub fn spawn_touch_poller(tx: Sender<TouchEvent>) {
+    thread::spawn(move || {
+        let mut devices: Vec<TouchDevice> = Vec::new();
+
+        let scan_devices = |devices: &mut Vec<TouchDevice>| {
             if let Ok(entries) = fs::read_dir("/dev/input") {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     let Some(stem) = name.to_str().filter(|s| s.starts_with("event")) else { continue };
                     let path = format!("/dev/input/{stem}");
-                    if devices.iter().any(|(p, _)| p == &path) {
+                    if devices.iter().any(|device| device.path == path) {
                         continue;
                     }
                     let cpath = match std::ffi::CString::new(path.clone()) {
@@ -108,8 +177,9 @@ pub fn spawn_touch_poller(tx: Sender<Instant>) {
                     let fd = unsafe { libc::open(cpath.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC) };
                     if fd < 0 { continue; }
                     if has_touch_cap(fd) {
-                        tracing::info!("touch poller watching {} (touch)", stem);
-                        devices.push((path, fd));
+                        let y_axis = YAxis::read(fd);
+                        tracing::info!("touch poller watching {} (touch, position={})", stem, if y_axis.is_some() { "available" } else { "unavailable" });
+                        devices.push(TouchDevice { path, fd, y_axis });
                     } else {
                         unsafe { libc::close(fd) };
                     }
@@ -121,6 +191,8 @@ pub fn spawn_touch_poller(tx: Sender<Instant>) {
 
         let mut buf = [0u8; 64 * std::mem::size_of::<InputEvent>()];
         let mut last_scan = Instant::now();
+        let mut last_touch_sent: Option<Instant> = None;
+        let mut last_position_sent: Option<Instant> = None;
 
         loop {
             // If no touch devices are available, wait and scan periodically
@@ -140,8 +212,8 @@ pub fn spawn_touch_poller(tx: Sender<Instant>) {
 
             let mut pollfds: Vec<libc::pollfd> = devices
                 .iter()
-                .map(|(_, fd)| libc::pollfd {
-                    fd: *fd,
+                .map(|device| libc::pollfd {
+                    fd: device.fd,
                     events: libc::POLLIN,
                     revents: 0,
                 })
@@ -169,11 +241,11 @@ pub fn spawn_touch_poller(tx: Sender<Instant>) {
                 }
 
                 if pfd.revents & libc::POLLIN != 0 {
-                    let fd = devices[i].1;
+                    let device = &devices[i];
                     let mut has_read_error = false;
 
                     loop {
-                        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+                        let n = unsafe { libc::read(device.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
                         if n < 0 {
                             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
                             if err == libc::EAGAIN || err == libc::EWOULDBLOCK {
@@ -192,11 +264,33 @@ pub fn spawn_touch_poller(tx: Sender<Instant>) {
                             let ev = unsafe {
                                 *(buf.as_ptr().add(j * std::mem::size_of::<InputEvent>()) as *const InputEvent)
                             };
-                            if ev.type_ == EV_ABS as u16
-                                || (ev.type_ == EV_KEY as u16 && ev.code == BTN_TOUCH as u16 && ev.value == 1)
+                            let touch_started = (ev.type_ == EV_KEY as u16
+                                && ev.code as usize == BTN_TOUCH
+                                && ev.value == 1)
+                                || (ev.type_ == EV_ABS as u16
+                                    && ev.code == ABS_MT_TRACKING_ID
+                                    && ev.value >= 0);
+                            if touch_started {
+                                last_position_sent = None;
+                            }
+                            let relative_y = if ev.type_ == EV_ABS as u16 {
+                                device.y_axis.filter(|axis| axis.code == ev.code).and_then(|axis| axis.normalize(ev.value))
+                            } else {
+                                None
+                            };
+                            if let Some(relative_y) = relative_y.filter(|_| {
+                                last_position_sent.map_or(true, |t| t.elapsed() >= Duration::from_millis(50))
+                            }) {
+                                let now = Instant::now();
+                                last_touch_sent = Some(now);
+                                last_position_sent = Some(now);
+                                let _ = tx.send(TouchEvent { at: now, relative_y: Some(relative_y) });
+                            } else if touch_started
+                                && last_touch_sent.map_or(true, |t| t.elapsed() >= Duration::from_millis(50))
                             {
-                                let _ = tx.send(Instant::now());
-                                break;
+                                let now = Instant::now();
+                                last_touch_sent = Some(now);
+                                let _ = tx.send(TouchEvent { at: now, relative_y: None });
                             }
                         }
                     }
@@ -211,9 +305,9 @@ pub fn spawn_touch_poller(tx: Sender<Instant>) {
             dead_indices.sort_unstable();
             dead_indices.dedup();
             for &idx in dead_indices.iter().rev() {
-                let (path, fd) = devices.remove(idx);
-                tracing::info!("touch poller removed disconnected device {}", path);
-                unsafe { libc::close(fd) };
+                let device = devices.remove(idx);
+                tracing::info!("touch poller removed disconnected device {}", device.path);
+                unsafe { libc::close(device.fd) };
             }
         }
     });
