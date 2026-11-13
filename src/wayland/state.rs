@@ -40,8 +40,9 @@ use crate::config::Config;
 use crate::layout::{CustomLayoutFile, KeyboardLayout, LayerId, LayoutMode, key::KeyAction};
 use crate::render::engine::{Rect, RenderEngine};
 use crate::render::slint::SlintScene;
-use crate::render::theme::Theme;
+use crate::render::theme::{Color, Theme};
 use crate::suggest::SuggestEngine;
+use crate::suggest::swipe::{SwipeKeyGeom, SwipeRecognizer};
 use crate::wayland::input_method::{InputMethodState, TextInputCapabilities, TextInputSource};
 use crate::wayland::layer_shell::create_layer_surface;
 use crate::wayland::virtual_keyboard::{KEYMAP_FORMAT, create_keymap_fd};
@@ -64,6 +65,76 @@ const KEY_HOME: u32 = 102;
 const KEY_END: u32 = 107;
 const KEY_INSERT: u32 = 110;
 const KEY_V: u32 = 47;
+
+/// Timed finger path for one touch that started on a letter key.
+#[derive(Debug, Clone)]
+pub struct SwipeTrace {
+    candidates: Vec<String>,
+    points: Vec<(f64, f64, Instant)>,
+    start_x: f64,
+    start_y: f64,
+    start: Instant,
+    max_distance: f64,
+    threshold: f64,
+    last_preview_at: Option<Instant>,
+}
+
+impl SwipeTrace {
+    fn new(x: f64, y: f64, now: Instant, threshold: f64) -> Self {
+        Self {
+            points: vec![(x, y, now)],
+            candidates: Vec::new(),
+            start_x: x,
+            start_y: y,
+            start: now,
+            max_distance: 0.0,
+            threshold,
+            last_preview_at: None,
+        }
+    }
+
+    fn push(&mut self, x: f64, y: f64, now: Instant) {
+        self.max_distance = self
+            .max_distance
+            .max((x - self.start_x).hypot(y - self.start_y));
+        const MAX_POINTS: usize = 256;
+        if self.points.len() < MAX_POINTS {
+            self.points.push((x, y, now));
+        } else {
+            // Preserve the gesture origin and current endpoint while halving
+            // old samples so long swipes still decode their final direction.
+            let mut compacted = Vec::with_capacity(MAX_POINTS / 2 + 1);
+            if let Some(first) = self.points.first().copied() {
+                compacted.push(first);
+            }
+            compacted.extend(
+                self.points
+                    .iter()
+                    .skip(1)
+                    .take(self.points.len().saturating_sub(2))
+                    .step_by(2)
+                    .copied(),
+            );
+            compacted.push((x, y, now));
+            self.points = compacted;
+        }
+    }
+
+    fn preview_due(&mut self, now: Instant) -> bool {
+        if self
+            .last_preview_at
+            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(50))
+        {
+            return false;
+        }
+        self.last_preview_at = Some(now);
+        true
+    }
+
+    fn qualifies(&self) -> bool {
+        self.points.len() >= 2 && self.max_distance >= self.threshold
+    }
+}
 
 /// Number of SHM buffers to cycle through. The compositor holds a buffer until
 /// it releases it; a small ring decouples rendering from the release round-trip
@@ -118,6 +189,9 @@ pub struct WaylandState {
     pub im_state: InputMethodState,
     pub text_input_capabilities: TextInputCapabilities,
     pub fallback_warning_emitted: bool,
+    pub swipe_preview: Option<String>,
+    pub fading_swipe_trail: Option<Vec<(f64, f64, Instant)>>,
+    pub last_trail_frame_at: Option<Instant>,
     pub current_layer: LayerId,
     pub layout_mode: LayoutMode,
     pub custom_layout: Option<CustomLayoutFile>,
@@ -132,6 +206,10 @@ pub struct WaylandState {
     pub pending_taps: HashMap<i32, (usize, usize)>,
     pub pending_tap_details: HashMap<i32, (KeyAction, Option<String>, Instant)>,
     pub pointer_pending_detail: Option<(KeyAction, Option<String>, Instant)>,
+    /// Lazy OpenSwipe recognizer fed from `suggest_engine.dictionary`.
+    pub swipe_engine: Option<SwipeRecognizer>,
+    /// Per-touch gesture candidates; only one trace is kept at a time.
+    pub swipe_traces: HashMap<i32, SwipeTrace>,
     /// Slint headless paint scene (lazily initialized on first redraw).
     pub slint_scene: Option<SlintScene>,
 
@@ -294,8 +372,13 @@ impl WaylandState {
             pending_taps: HashMap::new(),
             pending_tap_details: HashMap::new(),
             pointer_pending_detail: None,
+            swipe_engine: None,
+            swipe_traces: HashMap::new(),
             slint_scene: None,
             space_touch_start: None,
+            swipe_preview: None,
+            fading_swipe_trail: None,
+            last_trail_frame_at: None,
             space_last_x: 0.0,
             is_space_swiping: false,
             swipe_offset: None,
@@ -353,7 +436,10 @@ impl WaylandState {
                 "surrounding_text_readback=false: host surrounding text readback is disabled (write-only mode)"
             );
         }
-        if self.text_input_capabilities.input_method_v2 && input_method_bound && !input_method_active {
+        if self.text_input_capabilities.input_method_v2
+            && input_method_bound
+            && !input_method_active
+        {
             tracing::info!(
                 "Input-method-v2 is ready; waiting for a focused text field to activate it"
             );
@@ -398,7 +484,11 @@ impl WaylandState {
                     "Auto-placement: touchscreen rel_y={:.2} -> {} -> {} (exclusive_zone={})",
                     rel_y,
                     if is_upper { "upper half" } else { "lower half" },
-                    if exclusive { "docked" } else { "floating overlay" },
+                    if exclusive {
+                        "docked"
+                    } else {
+                        "floating overlay"
+                    },
                     zone
                 );
                 return (exclusive, zone);
@@ -461,7 +551,11 @@ impl WaylandState {
                 res.monitor_rect.1,
                 res.rel_y,
                 if is_upper { "upper half" } else { "lower half" },
-                if exclusive { "docked" } else { "floating overlay" },
+                if exclusive {
+                    "docked"
+                } else {
+                    "floating overlay"
+                },
                 zone
             );
             (exclusive, zone)
@@ -518,11 +612,10 @@ impl WaylandState {
         self.is_visible = true;
         self.manually_shown = manual;
         self.active_exclusive_zone = Some(zone);
-        self.init_surface(qh);
-
-        if let Some(ref surface) = self.layer_surface {
-            surface.set_exclusive_zone(zone);
-            surface.commit();
+        if self.layer_surface.is_none() {
+            self.init_surface(qh);
+        } else {
+            self.sync_surface_geometry();
         }
 
         if let Some(ref text) = self.im_state.surrounding_text {
@@ -540,6 +633,9 @@ impl WaylandState {
             return;
         }
         tracing::info!("Hiding HyprOsk on-screen keyboard");
+        self.swipe_traces.clear();
+        self.swipe_preview = None;
+        self.fading_swipe_trail = None;
         self.is_visible = false;
         self.is_configured = false;
         self.manually_shown = false;
@@ -639,7 +735,11 @@ impl WaylandState {
         self.active_exclusive_zone = None;
         if self.is_visible {
             if let Some(ref surface) = self.layer_surface {
-                let zone = if exclusive { self.effective_keyboard_height() as i32 } else { 0 };
+                let zone = if exclusive {
+                    self.effective_keyboard_height() as i32
+                } else {
+                    0
+                };
                 surface.set_exclusive_zone(zone);
                 surface.commit();
             }
@@ -654,7 +754,11 @@ impl WaylandState {
                 self.config.general.exclusive_zone = exclusive;
                 self.active_exclusive_zone = None;
                 if let Some(ref surface) = self.layer_surface {
-                    let zone = if exclusive { self.effective_keyboard_height() as i32 } else { 0 };
+                    let zone = if exclusive {
+                        self.effective_keyboard_height() as i32
+                    } else {
+                        0
+                    };
                     surface.set_exclusive_zone(zone);
                     surface.commit();
                 }
@@ -673,14 +777,16 @@ impl WaylandState {
             "HyprOsk exclusivity set: exclusive_zone = {}",
             self.config.general.exclusive_zone
         );
-        if let Some(ref surface) = self.layer_surface {
-            let zone = if self.is_visible && self.config.general.exclusive_zone {
-                self.effective_keyboard_height() as i32
-            } else {
-                0
-            };
-            surface.set_exclusive_zone(zone);
-            surface.commit();
+        if self.is_visible {
+            if let Some(ref surface) = self.layer_surface {
+                let zone = if self.config.general.exclusive_zone {
+                    self.effective_keyboard_height() as i32
+                } else {
+                    0
+                };
+                surface.set_exclusive_zone(zone);
+                surface.commit();
+            }
         }
     }
 
@@ -691,14 +797,16 @@ impl WaylandState {
             "HyprOsk exclusivity toggled: exclusive_zone = {}",
             self.config.general.exclusive_zone
         );
-        if let Some(ref surface) = self.layer_surface {
-            let zone = if self.is_visible && self.config.general.exclusive_zone {
-                self.effective_keyboard_height() as i32
-            } else {
-                0
-            };
-            surface.set_exclusive_zone(zone);
-            surface.commit();
+        if self.is_visible {
+            if let Some(ref surface) = self.layer_surface {
+                let zone = if self.config.general.exclusive_zone {
+                    self.effective_keyboard_height() as i32
+                } else {
+                    0
+                };
+                surface.set_exclusive_zone(zone);
+                surface.commit();
+            }
         }
     }
 
@@ -725,29 +833,31 @@ impl WaylandState {
     }
 
     pub fn sync_surface_geometry(&mut self) {
+        if !self.is_visible {
+            return;
+        }
         if let Some(ref surface) = self.layer_surface {
-            use smithay_client_toolkit::shell::wlr_layer::Anchor;
+            use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity};
 
             let target_h = self.effective_keyboard_height();
-            let (target_w, margin_b, margin_h) =
-                if let Some(ref custom) = self.custom_layout {
-                    let w = custom.width.unwrap_or(0);
-                    let mb = custom
-                        .margin_bottom
-                        .unwrap_or(self.config.general.margin_bottom);
-                    let mh = if custom.width.is_some() {
-                        0
-                    } else {
-                        self.config.general.margin_horizontal
-                    };
-                    (w, mb, mh)
+            let (target_w, margin_b, margin_h) = if let Some(ref custom) = self.custom_layout {
+                let w = custom.width.unwrap_or(0);
+                let mb = custom
+                    .margin_bottom
+                    .unwrap_or(self.config.general.margin_bottom);
+                let mh = if custom.width.is_some() {
+                    0
                 } else {
-                    (
-                        0,
-                        self.config.general.margin_bottom,
-                        self.config.general.margin_horizontal,
-                    )
+                    self.config.general.margin_horizontal
                 };
+                (w, mb, mh)
+            } else {
+                (
+                    0,
+                    self.config.general.margin_bottom,
+                    self.config.general.margin_horizontal,
+                )
+            };
 
             self.height = target_h;
             if target_w > 0 {
@@ -760,26 +870,23 @@ impl WaylandState {
                 surface.set_margin(0, margin_h, margin_b, margin_h);
             }
 
-            let zone = if self.is_visible {
-                match self.active_exclusive_zone {
-                    Some(0) => 0,
-                    Some(_) => {
-                        let new_zone = self.height as i32;
-                        self.active_exclusive_zone = Some(new_zone);
-                        new_zone
-                    }
-                    None => {
-                        if self.config.general.exclusive_zone {
-                            self.height as i32
-                        } else {
-                            0
-                        }
+            let zone = match self.active_exclusive_zone {
+                Some(0) => 0,
+                Some(_) => {
+                    let new_zone = self.height as i32;
+                    self.active_exclusive_zone = Some(new_zone);
+                    new_zone
+                }
+                None => {
+                    if self.config.general.exclusive_zone {
+                        self.height as i32
+                    } else {
+                        0
                     }
                 }
-            } else {
-                0
             };
             surface.set_exclusive_zone(zone);
+            surface.set_keyboard_interactivity(KeyboardInteractivity::None);
             surface.commit();
         }
     }
@@ -1570,10 +1677,19 @@ impl WaylandState {
         }
     }
 
+    fn layout_suggestions(&self) -> Vec<String> {
+        if let Some(preview) = &self.swipe_preview {
+            vec![String::new(), preview.clone(), String::new()]
+        } else {
+            self.suggest_engine.candidates.clone()
+        }
+    }
+
     pub fn sync_layout_and_redraw(&mut self, qh: &QueueHandle<Self>) {
+        let suggestions = self.layout_suggestions();
         if self.clipboard_mode {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
-            let mut lay = KeyboardLayout::clipboard(&history, &self.suggest_engine.candidates);
+            let mut lay = KeyboardLayout::clipboard(&history, &suggestions);
             if let Some(ref custom) = self.custom_layout {
                 lay.colors = custom.colors.as_ref().map(|c| c.resolved(&custom.m3_map));
                 lay.key_spacing = custom.key_spacing;
@@ -1587,15 +1703,12 @@ impl WaylandState {
             }
             self.layout = lay;
         } else if let Some(ref custom) = self.custom_layout {
-            self.layout = custom.to_keyboard_layout(
-                self.current_layer,
-                &self.suggest_engine.candidates,
-                self.caps_lock,
-            );
+            self.layout =
+                custom.to_keyboard_layout(self.current_layer, &suggestions, self.caps_lock);
         } else {
             self.layout = KeyboardLayout::get_layout_for_mode(
                 self.current_layer,
-                &self.suggest_engine.candidates,
+                &suggestions,
                 self.caps_lock,
                 self.layout_mode,
             );
@@ -1719,6 +1832,32 @@ impl WaylandState {
                     &latched_keys,
                     self.swipe_offset,
                 );
+            }
+
+            let now = Instant::now();
+            let trail: Vec<(f32, f32, Instant)> = self
+                .swipe_traces
+                .values()
+                .find(|trace| trace.qualifies())
+                .map(|trace| &trace.points)
+                .or(self.fading_swipe_trail.as_ref())
+                .map(|points| {
+                    points
+                        .iter()
+                        .map(|(x, y, at)| (*x as f32, *y as f32, *at))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if trail.len() > 1 {
+                let color = self
+                    .layout
+                    .colors
+                    .as_ref()
+                    .and_then(|c| c.swipe_trail_color.as_deref().or(c.accent_color.as_deref()))
+                    .map(Color::parse_hex)
+                    .unwrap_or(self.theme.accent_color);
+                RenderEngine::draw_swipe_trail(canvas, width, height, &trail, now, color);
+                slint_damage = Some(Vec::new());
             }
 
             if let Some(ref surface) = self.layer_surface
@@ -1875,13 +2014,12 @@ impl WaylandState {
 
                         // Replace only the selected browser-completion suffix.
                         if has_selection
-                            && let Some((completion_suffix, (start, end))) =
-                                host_completion_suffix(
-                                    self.im_state.surrounding_text.as_deref(),
-                                    self.im_state.cursor_pos,
-                                    self.im_state.anchor_pos,
-                                    &chosen_word,
-                                )
+                            && let Some((completion_suffix, (start, end))) = host_completion_suffix(
+                                self.im_state.surrounding_text.as_deref(),
+                                self.im_state.cursor_pos,
+                                self.im_state.anchor_pos,
+                                &chosen_word,
+                            )
                         {
                             let replacement = format!("{} ", completion_suffix);
                             tracing::info!(
@@ -2223,8 +2361,71 @@ impl WaylandState {
         }
     }
 
+    pub fn update_swipe_trail(&mut self, qh: &QueueHandle<Self>) {
+        const TRAIL_LIFETIME: Duration = Duration::from_millis(420);
+        const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+        let now = Instant::now();
+
+        // Touch motion events can arrive faster than the render loop. Refresh
+        // the active path at display cadence, and keep animating its fade for
+        // one trail lifetime after the last sample so a stationary finger does
+        // not leave a frozen line on screen.
+        let latest_active_sample = self
+            .swipe_traces
+            .values()
+            .filter(|trace| trace.qualifies())
+            .filter_map(|trace| trace.points.last().map(|(_, _, at)| *at))
+            .max();
+        if let Some(last_sample_at) = latest_active_sample {
+            let trail_still_visible =
+                now.saturating_duration_since(last_sample_at) < TRAIL_LIFETIME;
+            if !trail_still_visible {
+                // Clear the last rendered pixels once the active trail has
+                // fully faded; otherwise the surface would keep its final
+                // nearly transparent frame until another input event.
+                if self.last_trail_frame_at.take().is_some() {
+                    self.redraw(qh);
+                }
+                return;
+            }
+            let frame_due = self
+                .last_trail_frame_at
+                .is_none_or(|last| now.saturating_duration_since(last) >= FRAME_INTERVAL);
+            if frame_due {
+                self.last_trail_frame_at = Some(now);
+                self.redraw(qh);
+            }
+            return;
+        }
+        let Some(points) = self.fading_swipe_trail.as_mut() else {
+            self.last_trail_frame_at = None;
+            return;
+        };
+        points.retain(|(_, _, at)| now.saturating_duration_since(*at) < TRAIL_LIFETIME);
+        if points.is_empty() {
+            self.fading_swipe_trail = None;
+            self.last_trail_frame_at = None;
+            self.redraw(qh);
+            return;
+        }
+        if self
+            .last_trail_frame_at
+            .is_some_and(|last| now.saturating_duration_since(last) < FRAME_INTERVAL)
+        {
+            return;
+        }
+        self.last_trail_frame_at = Some(now);
+        self.redraw(qh);
+    }
+
     pub fn update_hold_preview(&mut self, qh: &QueueHandle<Self>) {
         // Secondary-key preview popup; disabled via `"preview_enabled": false`.
+        if self.swipe_traces.values().any(SwipeTrace::qualifies) {
+            if self.hold_preview.take().is_some() {
+                self.redraw(qh);
+            }
+            return;
+        }
         if self.layout.preview_enabled == Some(false) {
             if self.hold_preview.is_some() {
                 self.hold_preview = None;
@@ -2269,6 +2470,209 @@ impl WaylandState {
             self.hold_preview = None;
             self.redraw(qh);
         }
+    }
+
+    fn key_rect(&self, r_idx: usize, k_idx: usize) -> Option<Rect> {
+        self.key_rects
+            .get(r_idx)?
+            .iter()
+            .find(|(_, index)| *index == k_idx)
+            .map(|(rect, _)| *rect)
+    }
+
+    fn begin_swipe_trace(&mut self, touch_id: i32, r_idx: usize, k_idx: usize, x: f64, y: f64) {
+        if self.clipboard_mode || !self.swipe_traces.is_empty() {
+            return;
+        }
+        let Some(rect) = self.key_rect(r_idx, k_idx) else {
+            return;
+        };
+        let threshold = (rect.w as f64 * 0.5).clamp(18.0, 72.0);
+        self.swipe_traces
+            .insert(touch_id, SwipeTrace::new(x, y, Instant::now(), threshold));
+    }
+
+    fn track_swipe_motion(&mut self, touch_id: i32, x: f64, y: f64) {
+        if let Some(trace) = self.swipe_traces.get_mut(&touch_id) {
+            trace.push(x, y, Instant::now());
+        }
+    }
+
+    /// Letter-key geometry in normalized letter-area coordinates,
+    /// plus (aspect, x0, y0, width, height) for normalising the finger path.
+    fn swipe_layout(&self) -> Option<(Vec<SwipeKeyGeom>, f32, f32, f32, f32, f32)> {
+        let mut keys: Vec<(char, Rect)> = Vec::new();
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+
+        for (r_idx, row) in self.layout.rows.iter().enumerate() {
+            let Some(rects) = self.key_rects.get(r_idx) else {
+                continue;
+            };
+            for (rect, k_idx) in rects {
+                let Some(key) = row.keys.get(*k_idx) else {
+                    continue;
+                };
+                let KeyAction::Text(text) = &key.action else {
+                    continue;
+                };
+                let mut chars = text.chars();
+                let Some(letter) = chars.next() else {
+                    continue;
+                };
+                if chars.next().is_some() || !letter.is_ascii_alphabetic() {
+                    continue;
+                }
+                let letter = letter.to_ascii_lowercase();
+                if keys.iter().any(|(existing, _)| *existing == letter) {
+                    continue;
+                }
+                keys.push((letter, *rect));
+                min_x = min_x.min(rect.x);
+                min_y = min_y.min(rect.y);
+                max_x = max_x.max(rect.x + rect.w);
+                max_y = max_y.max(rect.y + rect.h);
+            }
+        }
+
+        if keys.len() < 2 || max_x <= min_x || max_y <= min_y {
+            return None;
+        }
+        let width = (max_x - min_x).max(1.0);
+        let height = (max_y - min_y).max(1.0);
+        let geometry = keys
+            .into_iter()
+            .map(|(letter, rect)| SwipeKeyGeom {
+                letter,
+                cx: (rect.x + rect.w * 0.5 - min_x) / width,
+                cy: (rect.y + rect.h * 0.5 - min_y) / height,
+                hw: (rect.w * 0.5) / width,
+                hh: (rect.h * 0.5) / height,
+            })
+            .collect();
+        Some((geometry, height / width, min_x, min_y, width, height))
+    }
+
+    fn recognize_swipe(&mut self, trace: &SwipeTrace) -> Vec<String> {
+        let Some((keys, aspect, x0, y0, width, height)) = self.swipe_layout() else {
+            return Vec::new();
+        };
+        if self.swipe_engine.is_none() {
+            self.swipe_engine = SwipeRecognizer::new();
+            if self.swipe_engine.is_none() {
+                tracing::warn!("swipe engine allocation failed");
+                return Vec::new();
+            }
+        }
+        #[cfg(feature = "futo-swipe")]
+        if let Some(engine) = self.swipe_engine.as_mut() {
+            engine.prepare_layout(&keys);
+        }
+
+        #[cfg(not(feature = "futo-swipe"))]
+        {
+            let need_words = self
+                .swipe_engine
+                .as_mut()
+                .map(|engine| engine.prepare_layout(&keys))
+                .unwrap_or(false);
+            if need_words {
+                let words = self.suggest_engine.dictionary.all_words(usize::MAX);
+                tracing::info!("geometric swipe engine loading {} base words", words.len());
+                if let Some(engine) = self.swipe_engine.as_mut()
+                    && !engine.load_words(&words)
+                {
+                    tracing::warn!("geometric swipe engine could not load dictionary");
+                    return Vec::new();
+                }
+            }
+        }
+
+        let first_time = trace.points.first().map_or(trace.start, |point| point.2);
+        let points: Vec<(f32, f32, f64)> = trace
+            .points
+            .iter()
+            .map(|(x, y, at)| {
+                (
+                    ((*x as f32) - x0) / width,
+                    ((*y as f32) - y0) / height,
+                    at.duration_since(first_time).as_secs_f64() * 1000.0,
+                )
+            })
+            .collect();
+        #[cfg(feature = "futo-swipe")]
+        {
+            let dictionary = &self.suggest_engine.dictionary;
+            self.swipe_engine
+                .as_mut()
+                .map(|engine| engine.decode(&points, dictionary, aspect, 6))
+                .unwrap_or_default()
+        }
+        #[cfg(not(feature = "futo-swipe"))]
+        {
+            self.swipe_engine
+                .as_mut()
+                .map(|engine| engine.decode(&points, aspect, 6))
+                .unwrap_or_default()
+        }
+    }
+
+    fn finish_swipe(&mut self, trace: &SwipeTrace, qh: &QueueHandle<Self>) -> bool {
+        self.swipe_preview = None;
+        let candidates = self.recognize_swipe(trace);
+        let Some(best) = candidates.first() else {
+            return false;
+        };
+        let best = self.swipe_case_word(best);
+        let left = candidates
+            .get(1)
+            .map(|word| self.swipe_case_word(word))
+            .unwrap_or_else(|| best.clone());
+        let right = candidates
+            .get(2)
+            .map(|word| self.swipe_case_word(word))
+            .unwrap_or_else(|| left.clone());
+        let slots = vec![left, best, right];
+        let best = slots[1].clone();
+        tracing::info!("swipe recognized '{}'", best);
+        self.suggest_engine.candidates = slots;
+        self.suggest_engine.is_next_word_mode = false;
+        let suggestion_key = self
+            .layout
+            .rows
+            .iter()
+            .enumerate()
+            .find_map(|(r_idx, row)| {
+                row.keys
+                    .iter()
+                    .position(|key| matches!(key.action, KeyAction::Suggestion(1)))
+                    .map(|k_idx| (r_idx, k_idx))
+            });
+        if let Some((r_idx, k_idx)) = suggestion_key {
+            self.handle_key_press(r_idx, k_idx, qh, -1);
+            self.pressed_keys.retain(|&key| key != (r_idx, k_idx));
+            self.pressed_key = self.pressed_keys.last().copied();
+            self.press_instant = None;
+            self.hold_preview = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn swipe_case_word(&self, word: &str) -> String {
+        if self.caps_lock {
+            return word.to_uppercase();
+        }
+        if self.current_layer == LayerId::Upper {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                return first.to_uppercase().collect::<String>() + chars.as_str();
+            }
+        }
+        word.to_string()
     }
 
     pub fn handle_motion(&mut self, x: f64, y: f64, qh: &QueueHandle<Self>) {
@@ -2820,6 +3224,8 @@ impl TouchHandler for WaylandState {
             y,
             self.active_touches.len() + 1
         );
+        // A second finger turns the gesture into a tap/chord, not a swipe.
+        self.swipe_traces.clear();
         if self.clipboard_mode {
             self.clipboard_drag_start = Some((x, y, self.clipboard_scroll_y));
             self.clipboard_dragging = false;
@@ -2828,6 +3234,16 @@ impl TouchHandler for WaylandState {
             RenderEngine::hit_test(&self.layout, &self.key_rects, x, y)
         {
             tracing::info!("  -> hit key {:?} at {}:{}", key.action, r_idx, k_idx);
+            let swipe_start = self.active_touches.is_empty()
+                && matches!(
+                    &key.action,
+                    KeyAction::Text(text)
+                        if text.chars().count() == 1
+                            && text
+                                .chars()
+                                .next()
+                                .is_some_and(|ch| ch.is_ascii_alphabetic())
+                );
             // Defer clipboard pastes to release so a vertical swipe scrolls
             // instead of pasting.
             if self.clipboard_mode && matches!(key.action, KeyAction::ClipboardItem(_)) {
@@ -2862,6 +3278,9 @@ impl TouchHandler for WaylandState {
                 self.pressed_key = Some((r_idx, k_idx));
                 self.press_instant = Some(Instant::now());
                 self.redraw(qh);
+                if swipe_start {
+                    self.begin_swipe_trace(_id, r_idx, k_idx, x, y);
+                }
             } else {
                 self.handle_key_press(r_idx, k_idx, qh, _id);
             }
@@ -2885,6 +3304,33 @@ impl TouchHandler for WaylandState {
             self.active_touches.len()
         );
         let details = self.pending_tap_details.remove(&_id);
+        if let Some(trace) = self.swipe_traces.remove(&_id)
+            && trace.qualifies()
+        {
+            self.fading_swipe_trail = Some(trace.points.clone());
+            self.last_trail_frame_at = None;
+            // Suppress the pending letter tap: this release is a word swipe.
+            if let Some(pending) = self.pending_taps.remove(&_id) {
+                self.pressed_keys.retain(|&p| p != pending);
+            }
+            self.active_touches.remove(&_id);
+            self.pressed_key = self.pressed_keys.last().copied();
+            self.press_instant = None;
+            self.hold_preview = None;
+            if !self.finish_swipe(&trace, qh) {
+                tracing::info!("swipe gesture produced no word");
+            }
+            if !self.caps_lock
+                && self.current_layer == LayerId::Upper
+                && (self.held_mods & Self::MOD_SHIFT) == 0
+            {
+                self.current_layer = LayerId::Lower;
+                self.pending_mods &= !Self::MOD_SHIFT;
+                self.sync_mods();
+            }
+            self.sync_layout_and_redraw(qh);
+            return;
+        }
         if let Some(pending) = self.pending_taps.remove(&_id) {
             self.active_touches.remove(&_id);
             self.pressed_keys.retain(|&p| p != pending);
@@ -2995,10 +3441,52 @@ impl TouchHandler for WaylandState {
         position: (f64, f64),
     ) {
         let (x, y) = position;
+        self.track_swipe_motion(_id, x, y);
+        let swipe_qualifies = self
+            .swipe_traces
+            .get(&_id)
+            .is_some_and(SwipeTrace::qualifies);
+        if swipe_qualifies {
+            if let Some((r, k)) = self.pending_taps.remove(&_id) {
+                self.pressed_keys.retain(|&pressed| pressed != (r, k));
+            }
+            self.pressed_key = self.pressed_keys.last().copied();
+            self.press_instant = None;
+            self.hold_preview = None;
+        }
+        let preview_trace = self.swipe_traces.get_mut(&_id).and_then(|trace| {
+            if trace.qualifies() && trace.preview_due(Instant::now()) {
+                Some(trace.clone())
+            } else {
+                None
+            }
+        });
+        if let Some(trace) = preview_trace {
+            if let Some((r, k)) = self.pending_taps.remove(&_id) {
+                self.pressed_keys.retain(|&pressed| pressed != (r, k));
+            }
+            self.pressed_key = self.pressed_keys.last().copied();
+            self.press_instant = None;
+            self.hold_preview = None;
+            let words = self.recognize_swipe(&trace);
+            if let Some(best) = words.first() {
+                let best = self.swipe_case_word(best);
+                if let Some(active) = self.swipe_traces.get_mut(&_id) {
+                    active.candidates = vec![best.clone()];
+                }
+                self.swipe_preview = Some(best);
+            } else {
+                if let Some(active) = self.swipe_traces.get_mut(&_id) {
+                    active.candidates.clear();
+                }
+                self.swipe_preview = None;
+            }
+            self.sync_layout_and_redraw(qh);
+        }
         self.handle_motion(x, y, qh);
     }
 
-    fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
+    fn cancel(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
         // Release held modifiers first so no physical key or latch can stick.
         self.release_all_held_mods();
         self.pressed_key = None;
@@ -3006,6 +3494,9 @@ impl TouchHandler for WaylandState {
         self.active_touches.clear();
         self.pending_taps.clear();
         self.pending_tap_details.clear();
+        self.swipe_preview = None;
+        self.fading_swipe_trail = None;
+        self.swipe_traces.clear();
         self.pointer_pending_detail = None;
         self.press_instant = None;
         self.hold_preview = None;
@@ -3017,6 +3508,7 @@ impl TouchHandler for WaylandState {
         self.swipe_offset = None;
         self.clipboard_drag_start = None;
         self.clipboard_dragging = false;
+        self.redraw(qh);
     }
 
     fn shape(
@@ -3238,7 +3730,21 @@ pub fn char_to_keycode_and_shift(ch: char) -> Option<(u32, bool)> {
 
 #[cfg(test)]
 mod state_tests {
-    use super::WaylandState;
+    #[test]
+    fn swipe_trace_compaction_preserves_origin_and_latest_point() {
+        let start = Instant::now();
+        let mut trace = SwipeTrace::new(0.0, 0.0, start, 10.0);
+        for i in 1..=600 {
+            trace.push(i as f64, 0.0, start + Duration::from_millis(i));
+        }
+        assert!(trace.points.len() <= 256);
+        assert_eq!(trace.points.first().map(|p| (p.0, p.1)), Some((0.0, 0.0)));
+        assert_eq!(trace.points.last().map(|p| (p.0, p.1)), Some((600.0, 0.0)));
+        assert!(trace.qualifies());
+    }
+
+    use super::{SwipeTrace, WaylandState};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn test_is_terminal_class() {
@@ -3340,8 +3846,7 @@ mod state_tests {
 
     #[test]
     fn test_host_completion_suffix_keeps_typed_prefix() {
-        let result =
-            super::host_completion_suffix(Some("www.youtube.com"), 1, 15, "well");
+        let result = super::host_completion_suffix(Some("www.youtube.com"), 1, 15, "well");
         assert_eq!(result, Some(("ell".to_string(), (1, 15))));
     }
 
@@ -3373,16 +3878,16 @@ mod state_tests {
 
     #[test]
     fn test_candidate_suffix_for_prefix_rejects_nonmatching_candidate() {
-        assert_eq!(
-            super::candidate_suffix_for_prefix("w", "hello"),
-            None
-        );
+        assert_eq!(super::candidate_suffix_for_prefix("w", "hello"), None);
     }
 
     #[test]
     fn test_compute_effective_keyboard_height() {
         // When custom_layout specifies a height, it overrides general.height
-        assert_eq!(super::compute_effective_keyboard_height(Some(470), 360), 470);
+        assert_eq!(
+            super::compute_effective_keyboard_height(Some(470), 360),
+            470
+        );
         // When custom_layout has no height, it falls back to general.height
         assert_eq!(super::compute_effective_keyboard_height(None, 360), 360);
     }

@@ -131,11 +131,15 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         );
     }
     if config.behavior.touch_only {
-        tracing::info!("touch_only enabled: automatic input-method activation requires recent touchscreen input");
+        tracing::info!(
+            "touch_only enabled: automatic input-method activation requires recent touchscreen input"
+        );
     }
     if config.behavior.auto_show || config.behavior.touch_only {
         crate::touch::spawn_touch_poller(touch_tx);
-        tracing::info!("Touchscreen monitoring enabled for input source tracking and touch_only gating");
+        tracing::info!(
+            "Touchscreen monitoring enabled for input source tracking and touch_only gating"
+        );
     }
 
     tracing::info!("HyprOsk daemon successfully initialized and running.");
@@ -219,6 +223,7 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         state.update_hold_preview(&qh);
         // Handle key repeat (e.g. hold backspace to continuously delete)
         state.update_key_repeat(&qh);
+        state.update_swipe_trail(&qh);
 
         // Flush and wait for next event
         conn.flush()?;

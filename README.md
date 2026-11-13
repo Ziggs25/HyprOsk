@@ -9,14 +9,36 @@ It shows automatically when you focus a text field (GTK, Qt, Firefox, Chromium, 
 - Auto show/hide on text input focus using `zwp_input_method_v2` + `zwp_text_input_v3`.
 - Layer-shell window anchored to bottom (`zwlr_layer_shell_v1`, `keyboard_interactivity = 0`), touch/pointer input, output via `commit_string` / virtual keyboard.
 - Layers: Lower, Upper (Shift), Symbols, Symbols2. Layout is Windows 11-style (Esc, Tab, Shift, Backspace, Ctrl/Alt/Super, arrows, Space, suggestion bar).
-- Suggestion bar + clipboard history.
+- Suggestion bar + clipboard history, with swipe typing in FUTO-enabled builds.
 - Folio/tablet detection: can suppress auto-show when a physical keyboard is attached.
+
+
+## Swipe typing
+
+Builds with the `futo-swipe` Cargo feature use FUTO's `honorable_sturgeon` int8 swipe encoder (`model_int8.pte`, about 1 MB) with ExecuTorch 1.5.1 and XNNPACK. The model turns a touch trace into character scores; HyprOsk runs lexicon-constrained CTC beam search in Rust against its existing sorted dictionary and learned words. The decoder stores references to dictionary entries instead of copying the word list into a C++ trie. Learned words such as `gyatt` can become swipe candidates as soon as HyprOsk learns them.
+
+The Rust binding calls the ExecuTorch C++ runtime underneath. Swipe preprocessing, CTC decoding, and dictionary integration are Rust. The encoder accepts the current key centers at runtime, so HyprOsk supplies the active layout geometry and keeps its existing suggestion bar and next-word predictions after a swipe.
+
+Custom layouts can set `colors.swipe_trail_color` to a hex color or a Matugen token such as `primary`. If omitted, the trail uses that layout's `accent_color`, then the theme accent.
+
+The model weights are distributed under the FUTO Model Weights License 1.0. **Swipe typing powered by FUTO Swipe technology.** The license is included at [`assets/futo_swipe/LICENSE.md`](assets/futo_swipe/LICENSE.md); see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). A FUTO-enabled build exposes this attribution with `hyprosk about`.
+
+To build the FUTO path, configure an ExecuTorch 1.5.1 CMake build with XNNPACK and portable operators, then point Cargo at its output and `libclang`:
+
+```bash
+export EXECUTORCH_RS_EXECUTORCH_LIB_DIR=/path/to/executorch/cmake-out
+export LIBCLANG_PATH=/path/to/libclang/lib
+cargo build --release --features futo-swipe
+```
+
+The model is located from the source checkout, beside the installed executable at `share/hyprosk/futo_swipe/model_int8.pte`, or via `HYPROSK_FUTO_MODEL`. Builds without `futo-swipe` retain the geometric fallback.
 
 ## Requirements
 
 - Hyprland (or any compositor with `zwlr_layer_shell_v1` + `zwp_virtual_keyboard_v1`; `zwp_input_method_v2` is needed for readable surrounding text and automatic text-field activation)
 - Wayland session
 - For building from source: `cargo`, `pkg-config`, `wayland`, `wayland-protocols`, `libxkbcommon`, `wayland-scanner`
+- For the FUTO swipe feature: ExecuTorch 1.5.1 static libraries with XNNPACK and portable operators, plus `libclang`
 
 ## Installation
 
@@ -123,6 +145,7 @@ hyprosk layer symbols    # symbols page 1
 hyprosk layer symbols2   # symbols page 2
 hyprosk clipboard    # toggle clipboard history view
 hyprosk status       # folio USB, posture switch, keyboard sources + verdict
+hyprosk about        # show software and swipe engine attribution
 hyprosk quit         # stop daemon
 ```
 

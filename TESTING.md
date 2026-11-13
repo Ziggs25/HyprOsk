@@ -50,6 +50,70 @@ instead of creating an unusable input-method object.
    surrounding-text snapshots. When explicitly enabled (`surrounding_text_readback = true`),
    surrounding text is read only when supported by the host.
 
+## Swipe typing check
+
+FUTO-enabled builds use the `honorable_sturgeon` int8 encoder and a Rust CTC
+beam decoder over references to the existing base and learned dictionary
+entries. The model is loaded from `assets/futo_swipe/model_int8.pte`, the
+installed `share/hyprosk/futo_swipe/model_int8.pte`, or `HYPROSK_FUTO_MODEL`.
+
+Automated checks require the ExecuTorch 1.5.1 CMake output and `libclang` used
+to build the FUTO feature:
+
+```sh
+nix-shell shell.nix --run \
+  'EXECUTORCH_RS_EXECUTORCH_LIB_DIR=/path/to/executorch/cmake-out LIBCLANG_PATH=/path/to/libclang/lib cargo test --features futo-swipe -q swipe'
+```
+
+The swipe tests include FUTO's published `computer` trajectory and require the
+model plus constrained decoder to rank `computer` first. Another test adds
+`gyatt` to an isolated user dictionary and verifies that its prefixes and
+terminal word are present in the swipe lexicon index.
+
+Manual:
+
+1. Run `hyprosk about` and verify the app displays “Swipe typing powered by
+   FUTO Swipe technology.”
+2. Hold a letter and glide across `hello`, `world`, `quick`, `brown`, and `fox`.
+   While moving, show only the best live candidate in the center suggestion
+   slot; ordinary autosuggest results should reappear after the gesture.
+3. Teach HyprOsk a new word such as `gyatt` by selecting it from suggestions,
+   then swipe that spelling. It should now be available to the decoder through
+   the same user dictionary used by typed suggestions. Lift to commit the best
+   candidate and trailing space; next-word predictions should follow where
+   dictionary bigrams exist.
+4. Verify the swipe trail is smooth under finger movement, fades after release,
+   and uses `colors.swipe_trail_color` from the active layout JSON. When omitted,
+   it should use the layout accent color.
+5. Hold a letter without moving for more than 300 ms and verify its secondary-key
+   popup and long-press output still work. After crossing the swipe threshold,
+   the pressed-key highlight and popup should clear and no secondary character
+   should be emitted. A short drag below half the starting key's width, or a drag
+   starting on Space/Enter/Shift/digits, remains a normal tap.
+6. Hold Shift or enable Caps Lock, swipe a word, and verify the committed word
+   is capitalized or uppercased. One-shot Shift should be consumed as for a tap.
+7. Put a second finger down during a drag and verify the swipe is cancelled and
+   normal tap/chord handling resumes.
+8. Resize the keyboard, switch to a custom layout, or rebuild a layer. Swipes
+   must use the current key centers; the model lexicon should refresh only after
+   the user dictionary changes, without copying word strings into C++.
+9. Typing and tapping candidates normally must still follow the input-method-v2
+   and autosuggest checks above.
+
+To estimate the runtime cost, record `VmRSS` before and after the first swipe.
+The first model execution and Rust reference-index creation happen on demand:
+
+```sh
+pid=$(pgrep -f 'target/(debug|release)/hyprosk' | head -1)
+grep VmRSS /proc/$pid/status   # before the first swipe
+# perform one letter swipe
+grep VmRSS /proc/$pid/status  # after
+```
+
+The index contains word references, not a second string table. Measure this
+separately from the model/runtime memory; do not compare the result with the
+previous OpenSwipe C++ trie measurements.
+
 ## Folio-mode detection check
 
 With `behavior.folio_mode = true`, run `hyprosk status` while the folio is
@@ -59,14 +123,23 @@ connected. Expect `folio USB (044e:1218): true`, `folio attached (verdict): true
 Source precedence is deliberate:
 
 1. `044e:1218` (Alps Touchpad) present -> attached.
-2. letter-capable evdev / `/proc` keyboard present -> attached.
-3. `SW_TABLET_MODE` alone -> detached.
+2. an **external** letter-capable keyboard present -> attached.
+3. no external keyboard -> `SW_TABLET_MODE` active means detached.
+
+The built-in `i8042` "AT Translated Set 2 keyboard"
+(`/devices/platform/i8042/serio0/...`) and the `INT33D5:00` "Intel HID events" /
+"Intel HID 5 button array" utilities carry `KEY_A..KEY_Z` **forever** — the
+`i8042` device never unregisters when the folio is removed. They are reported as
+`built-in i8042/acpi keyboard: true` and are classified out of step 2, so they
+can never suppress auto-show on their own. Only an external keyboard (USB, or
+the `serio1` docking-station PS/2 port) counts.
 
 `SW_TABLET_MODE` is never allowed to *enable* suppression: on this Dell it comes
 from `intel-hid` (INT33D5:00, "Intel HID switches") which only initializes the
 switch on the first `0xcc`/`0xcd` ACPI notify, and the value can latch across
-s2idle/hibernate. It is therefore only trusted when no keyboard was observed at
-all, so a flaky switch can never leave the user without any keyboard.
+s2idle/hibernate. Because a flaky switch can never leave the user without any
+keyboard, and never suppresses the OSK by itself, the failure mode is safe in
+both directions.
 
 ### Why the folio cannot be detected as "folded"
 

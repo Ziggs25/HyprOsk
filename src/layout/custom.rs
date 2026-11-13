@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 use crate::layout::key::{Key, KeyAction, LayerId, LayoutMode};
 use crate::layout::layouts::{KeyboardLayout, KeyboardRow};
@@ -234,6 +234,8 @@ pub struct LayoutColors {
     pub icon_color: Option<String>,
     pub icon_color_pressed: Option<String>,
     pub accent_color: Option<String>,
+    /// Dedicated swipe trail color; falls back to accent_color when absent.
+    pub swipe_trail_color: Option<String>,
     pub border_color: Option<String>,
     pub suggest_bg: Option<String>,
     pub suggest_bg_pressed: Option<String>,
@@ -269,6 +271,7 @@ impl LayoutColors {
             icon_color: r(&self.icon_color, "icon_color"),
             icon_color_pressed: r(&self.icon_color_pressed, "icon_color_pressed"),
             accent_color: r(&self.accent_color, "accent_color"),
+            swipe_trail_color: r(&self.swipe_trail_color, "swipe_trail_color"),
             border_color: r(&self.border_color, "border_color"),
             suggest_bg: r(&self.suggest_bg, "suggest_bg"),
             suggest_bg_pressed: r(&self.suggest_bg_pressed, "suggest_bg_pressed"),
@@ -298,11 +301,17 @@ impl CustomLayoutFile {
         let colors = parsed.get("colors")?;
 
         let get_color = |name: &str| -> Option<String> {
-            colors.get(name)?.get("dark")?.get("color")?.as_str().map(|s| s.to_string())
+            colors
+                .get(name)?
+                .get("dark")?
+                .get("color")?
+                .as_str()
+                .map(|s| s.to_string())
         };
 
         let surface = get_color("surface");
-        let surface_container = get_color("surface_container").or_else(|| get_color("surface_container_low"));
+        let surface_container =
+            get_color("surface_container").or_else(|| get_color("surface_container_low"));
         let surface_container_high =
             get_color("surface_container_high").or_else(|| get_color("surface_container"));
         let on_surface = get_color("on_surface");
@@ -322,6 +331,7 @@ impl CustomLayoutFile {
             icon_color: get_color("secondary").or_else(|| primary.clone()),
             icon_color_pressed: primary.clone(),
             accent_color: primary,
+            swipe_trail_color: None,
             border_color: outline,
             suggest_bg: Some("rgba(255, 255, 255, 0.05)".to_string()),
             suggest_bg_pressed: Some("rgba(255, 255, 255, 0.18)".to_string()),
@@ -368,8 +378,8 @@ impl CustomLayoutFile {
         {
             return Some(hex.clone());
         }
-        let is_hex = (val.len() == 6 || val.len() == 8)
-            && val.chars().all(|c| c.is_ascii_hexdigit());
+        let is_hex =
+            (val.len() == 6 || val.len() == 8) && val.chars().all(|c| c.is_ascii_hexdigit());
         if is_hex {
             Some(format!("#{val}"))
         } else {
@@ -489,7 +499,10 @@ impl CustomLayoutFile {
                 if let Ok(content) = std::fs::read_to_string(&conf_path) {
                     for line in content.lines() {
                         let trimmed = line.trim();
-                        if trimmed.starts_with("path =") || trimmed.starts_with("preload =") || trimmed.starts_with("wallpaper =") {
+                        if trimmed.starts_with("path =")
+                            || trimmed.starts_with("preload =")
+                            || trimmed.starts_with("wallpaper =")
+                        {
                             let parts: Vec<&str> = trimmed.split('=').collect();
                             if parts.len() >= 2 {
                                 let mut candidate = parts[parts.len() - 1].trim();
@@ -519,22 +532,86 @@ impl CustomLayoutFile {
     /// When matugen is enabled, Material 3 dynamic colors take precedence.
     pub fn apply_matugen_colors(&mut self, m3: LayoutColors) {
         if let Some(existing) = &mut self.colors {
-            if existing.dock_bg.is_none() { if let Some(c) = m3.dock_bg { existing.dock_bg = Some(c); } }
-            if existing.key_bg.is_none() { if let Some(c) = m3.key_bg { existing.key_bg = Some(c); } }
-            if existing.key_bg_pressed.is_none() { if let Some(c) = m3.key_bg_pressed { existing.key_bg_pressed = Some(c); } }
-            if existing.clipboard_bg.is_none() { if let Some(c) = m3.clipboard_bg { existing.clipboard_bg = Some(c); } }
-            if existing.text_color.is_none() { if let Some(c) = m3.text_color { existing.text_color = Some(c); } }
-            if existing.text_color_pressed.is_none() { if let Some(c) = m3.text_color_pressed { existing.text_color_pressed = Some(c); } }
-            if existing.sub_color.is_none() { if let Some(c) = m3.sub_color { existing.sub_color = Some(c); } }
-            if existing.icon_color.is_none() { if let Some(c) = m3.icon_color { existing.icon_color = Some(c); } }
-            if existing.icon_color_pressed.is_none() { if let Some(c) = m3.icon_color_pressed { existing.icon_color_pressed = Some(c); } }
-            if existing.accent_color.is_none() { if let Some(c) = m3.accent_color { existing.accent_color = Some(c); } }
-            if existing.border_color.is_none() { if let Some(c) = m3.border_color { existing.border_color = Some(c); } }
-            if existing.suggest_bg.is_none() { if let Some(c) = m3.suggest_bg { existing.suggest_bg = Some(c); } }
-            if existing.suggest_bg_pressed.is_none() { if let Some(c) = m3.suggest_bg_pressed { existing.suggest_bg_pressed = Some(c); } }
-            if existing.preview_bg_color.is_none() { if let Some(c) = m3.preview_bg_color { existing.preview_bg_color = Some(c); } }
-            if existing.preview_text_color.is_none() { if let Some(c) = m3.preview_text_color { existing.preview_text_color = Some(c); } }
-            if existing.preview_border_color.is_none() { if let Some(c) = m3.preview_border_color { existing.preview_border_color = Some(c); } }
+            if existing.dock_bg.is_none() {
+                if let Some(c) = m3.dock_bg {
+                    existing.dock_bg = Some(c);
+                }
+            }
+            if existing.key_bg.is_none() {
+                if let Some(c) = m3.key_bg {
+                    existing.key_bg = Some(c);
+                }
+            }
+            if existing.key_bg_pressed.is_none() {
+                if let Some(c) = m3.key_bg_pressed {
+                    existing.key_bg_pressed = Some(c);
+                }
+            }
+            if existing.clipboard_bg.is_none() {
+                if let Some(c) = m3.clipboard_bg {
+                    existing.clipboard_bg = Some(c);
+                }
+            }
+            if existing.text_color.is_none() {
+                if let Some(c) = m3.text_color {
+                    existing.text_color = Some(c);
+                }
+            }
+            if existing.text_color_pressed.is_none() {
+                if let Some(c) = m3.text_color_pressed {
+                    existing.text_color_pressed = Some(c);
+                }
+            }
+            if existing.sub_color.is_none() {
+                if let Some(c) = m3.sub_color {
+                    existing.sub_color = Some(c);
+                }
+            }
+            if existing.icon_color.is_none() {
+                if let Some(c) = m3.icon_color {
+                    existing.icon_color = Some(c);
+                }
+            }
+            if existing.icon_color_pressed.is_none() {
+                if let Some(c) = m3.icon_color_pressed {
+                    existing.icon_color_pressed = Some(c);
+                }
+            }
+            if existing.accent_color.is_none() {
+                if let Some(c) = m3.accent_color {
+                    existing.accent_color = Some(c);
+                }
+            }
+            if existing.border_color.is_none() {
+                if let Some(c) = m3.border_color {
+                    existing.border_color = Some(c);
+                }
+            }
+            if existing.suggest_bg.is_none() {
+                if let Some(c) = m3.suggest_bg {
+                    existing.suggest_bg = Some(c);
+                }
+            }
+            if existing.suggest_bg_pressed.is_none() {
+                if let Some(c) = m3.suggest_bg_pressed {
+                    existing.suggest_bg_pressed = Some(c);
+                }
+            }
+            if existing.preview_bg_color.is_none() {
+                if let Some(c) = m3.preview_bg_color {
+                    existing.preview_bg_color = Some(c);
+                }
+            }
+            if existing.preview_text_color.is_none() {
+                if let Some(c) = m3.preview_text_color {
+                    existing.preview_text_color = Some(c);
+                }
+            }
+            if existing.preview_border_color.is_none() {
+                if let Some(c) = m3.preview_border_color {
+                    existing.preview_border_color = Some(c);
+                }
+            }
         } else {
             self.colors = Some(m3);
         }
@@ -569,8 +646,10 @@ impl CustomLayoutFile {
         match clean_name {
             "desktop" => {
                 tracing::info!("Using embedded default desktop layout");
-                let mut parsed: Self = serde_json::from_str(DEFAULT_DESKTOP_LAYOUT)
-                    .map_err(|e| anyhow::anyhow!("Failed to parse embedded desktop layout JSON: {}", e))?;
+                let mut parsed: Self =
+                    serde_json::from_str(DEFAULT_DESKTOP_LAYOUT).map_err(|e| {
+                        anyhow::anyhow!("Failed to parse embedded desktop layout JSON: {}", e)
+                    })?;
                 if parsed.matugen.unwrap_or(false) {
                     if let Some((m3_colors, m3_map)) = Self::resolve_matugen_colors(
                         parsed.matugen_file.as_deref(),
@@ -585,8 +664,10 @@ impl CustomLayoutFile {
             }
             "mobile" => {
                 tracing::info!("Using embedded default mobile layout");
-                let mut parsed: Self = serde_json::from_str(DEFAULT_MOBILE_LAYOUT)
-                    .map_err(|e| anyhow::anyhow!("Failed to parse embedded mobile layout JSON: {}", e))?;
+                let mut parsed: Self =
+                    serde_json::from_str(DEFAULT_MOBILE_LAYOUT).map_err(|e| {
+                        anyhow::anyhow!("Failed to parse embedded mobile layout JSON: {}", e)
+                    })?;
                 if parsed.matugen.unwrap_or(false) {
                     if let Some((m3_colors, m3_map)) = Self::resolve_matugen_colors(
                         parsed.matugen_file.as_deref(),
@@ -707,7 +788,9 @@ impl CustomLayoutFile {
                     RowDef::Simple(defs) => {
                         let keys: Vec<Key> = defs
                             .iter()
-                            .map(|def| convert_key_def(def, auto_upper, caps_lock, Some(&self.m3_map)))
+                            .map(|def| {
+                                convert_key_def(def, auto_upper, caps_lock, Some(&self.m3_map))
+                            })
                             .collect();
                         KeyboardRow::new(keys)
                     }
@@ -715,7 +798,9 @@ impl CustomLayoutFile {
                         let keys: Vec<Key> = obj
                             .keys
                             .iter()
-                            .map(|def| convert_key_def(def, auto_upper, caps_lock, Some(&self.m3_map)))
+                            .map(|def| {
+                                convert_key_def(def, auto_upper, caps_lock, Some(&self.m3_map))
+                            })
                             .collect();
                         let mut row = KeyboardRow::new(keys);
                         row.margin_bottom = obj.margin_bottom;
@@ -747,14 +832,13 @@ impl CustomLayoutFile {
             preview_enabled: self.preview_enabled,
             preview_height: self.preview_height,
             preview_font_size: self.preview_font_size,
-            colors: self
-                .colors
-                .as_ref()
-                .map(|c| c.resolved(&self.m3_map)),
+            colors: self.colors.as_ref().map(|c| c.resolved(&self.m3_map)),
         };
 
         // Always prepend the standard top action/suggestion bar
-        layout.rows.insert(0, KeyboardLayout::make_top_bar(suggestions));
+        layout
+            .rows
+            .insert(0, KeyboardLayout::make_top_bar(suggestions));
         layout
     }
 }
@@ -797,7 +881,9 @@ fn convert_key_def(
             if let Some(sub) = &obj.sub {
                 key.secondary_label = Some(sub.clone());
             }
-            key.is_special = obj.special.unwrap_or_else(|| is_default_special(&key.label, &key.action));
+            key.is_special = obj
+                .special
+                .unwrap_or_else(|| is_default_special(&key.label, &key.action));
             key.margin_left = obj.margin_left;
             key.margin_right = obj.margin_right.or(obj.gap);
             key.borders = obj.borders;
@@ -815,8 +901,7 @@ fn convert_key_def(
             key.icon_color = CustomLayoutFile::resolve_color(obj.icon_color.as_deref(), m3_map);
             key.icon_color_pressed =
                 CustomLayoutFile::resolve_color(obj.icon_color_pressed.as_deref(), m3_map);
-            key.border_color =
-                CustomLayoutFile::resolve_color(obj.border_color.as_deref(), m3_map);
+            key.border_color = CustomLayoutFile::resolve_color(obj.border_color.as_deref(), m3_map);
             key.opacity = obj.opacity;
             key
         }
@@ -966,7 +1051,10 @@ mod tests {
         // Row 1 (letters row 1) has 10 keys
         assert_eq!(k_layout.rows[1].keys.len(), 10);
         assert_eq!(k_layout.rows[1].keys[0].label, "q");
-        assert_eq!(k_layout.rows[1].keys[0].secondary_label.as_deref(), Some("1"));
+        assert_eq!(
+            k_layout.rows[1].keys[0].secondary_label.as_deref(),
+            Some("1")
+        );
         // Row 2 has 9 keys
         assert_eq!(k_layout.rows[2].keys.len(), 9);
         // Spacebar in row 4 has width 4.9 and action Space
@@ -1076,13 +1164,17 @@ mod tests {
             let r1 = &k_layout.rows[1];
             assert_eq!(r1.keys.len(), 10);
             let labels: Vec<&str> = r1.keys.iter().map(|k| k.label.as_str()).collect();
-            assert_eq!(labels, vec!["~", "`", "|", "•", "√", "π", "÷", "×", "¶", "∆"]);
+            assert_eq!(
+                labels,
+                vec!["~", "`", "|", "•", "√", "π", "÷", "×", "¶", "∆"]
+            );
         }
     }
 
     #[test]
     fn test_desktop_layout() {
-        let layout_file = CustomLayoutFile::load_from_name_or_path("desktop").expect("load desktop layout");
+        let layout_file =
+            CustomLayoutFile::load_from_name_or_path("desktop").expect("load desktop layout");
         assert_eq!(layout_file.name, "Desktop Layout");
         assert_eq!(layout_file.mode, "desktop");
         assert_eq!(layout_file.borders, Some(true));

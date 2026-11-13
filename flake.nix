@@ -21,6 +21,15 @@
             lockFile = ./Cargo.lock;
           };
 
+          postInstall = ''
+            install -Dm644 assets/futo_swipe/model_int8.pte \
+              "$out/share/hyprosk/futo_swipe/model_int8.pte"
+            install -Dm644 assets/futo_swipe/LICENSE.md \
+              "$out/share/hyprosk/futo_swipe/LICENSE.md"
+            install -Dm644 THIRD_PARTY_NOTICES.md \
+              "$out/share/doc/hyprosk/THIRD_PARTY_NOTICES.md"
+          '';
+
           nativeBuildInputs = with pkgs; [
             pkg-config
             wayland-scanner

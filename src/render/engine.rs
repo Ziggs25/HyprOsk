@@ -1,4 +1,4 @@
-use crate::layout::{key::Key, KeyboardLayout};
+use crate::layout::{KeyboardLayout, key::Key};
 use crate::render::theme::{Color, Theme};
 
 #[derive(Debug, Clone, Copy)]
@@ -39,9 +39,15 @@ impl RenderEngine {
         scroll_px: f32,
     ) -> Vec<Vec<(Rect, usize)>> {
         let is_mobile = layout.is_mobile() || total_width < 600;
-        let padding_x = layout.padding_x.unwrap_or(if is_mobile { 3.5 } else { 8.0 });
-        let padding_y = layout.padding_y.unwrap_or(if is_mobile { 4.0 } else { 8.0 });
-        let spacing = layout.key_spacing.unwrap_or(if is_mobile { 4.0 } else { 8.0 });
+        let padding_x = layout
+            .padding_x
+            .unwrap_or(if is_mobile { 3.5 } else { 8.0 });
+        let padding_y = layout
+            .padding_y
+            .unwrap_or(if is_mobile { 4.0 } else { 8.0 });
+        let spacing = layout
+            .key_spacing
+            .unwrap_or(if is_mobile { 4.0 } else { 8.0 });
         let row_spacing = layout.row_spacing.unwrap_or(spacing);
         let num_rows = layout.rows.len();
 
@@ -51,19 +57,30 @@ impl RenderEngine {
 
         // Top action bar height: 38px on portrait/mobile, 46px on landscape.
         let top_row_height = if is_mobile { 38.0 } else { 46.0 };
-        let remaining_height = (total_height as f32 - (2.0 * padding_y) - top_row_height - (num_rows as f32 * row_spacing)).max(10.0);
-        let default_key_row_height = layout.key_height.unwrap_or((remaining_height / (num_rows - 1).max(1) as f32).max(10.0));
+        let remaining_height = (total_height as f32
+            - (2.0 * padding_y)
+            - top_row_height
+            - (num_rows as f32 * row_spacing))
+            .max(10.0);
+        let default_key_row_height = layout
+            .key_height
+            .unwrap_or((remaining_height / (num_rows - 1).max(1) as f32).max(10.0));
 
         // Clipboard layouts have few rows (top + N card rows + bottom), so the
         // generic `remaining / (num_rows - 1)` formula yields a huge bottom row
         // (~125px when num_rows == 3). Compute a standard key-row height from a
         // normal 4-key-row keyboard and pin the clipboard bottom row
         // (ABC / Space / Backspace) to it.
-        let is_clipboard_layout = layout.rows.iter().any(|r| r.keys.iter().any(|k| k.is_clipboard));
+        let is_clipboard_layout = layout
+            .rows
+            .iter()
+            .any(|r| r.keys.iter().any(|k| k.is_clipboard));
         let standard_remaining =
-            (total_height as f32 - (2.0 * padding_y) - top_row_height - (4.0 * row_spacing)).max(10.0);
-        let standard_key_row_height =
-            layout.key_height.unwrap_or((standard_remaining / 4.0).clamp(50.0, 54.0));
+            (total_height as f32 - (2.0 * padding_y) - top_row_height - (4.0 * row_spacing))
+                .max(10.0);
+        let standard_key_row_height = layout
+            .key_height
+            .unwrap_or((standard_remaining / 4.0).clamp(50.0, 54.0));
         // Fixed footer for clipboard mode: the bottom (non-clipboard) row is
         // pinned to the bottom edge so the card area above it can scroll.
         let clipboard_bottom_idx = if is_clipboard_layout && num_rows > 1 {
@@ -71,7 +88,11 @@ impl RenderEngine {
                 .keys
                 .iter()
                 .all(|k| k.is_clipboard);
-            if last_is_clipboard { None } else { Some(num_rows - 1) }
+            if last_is_clipboard {
+                None
+            } else {
+                Some(num_rows - 1)
+            }
         } else {
             None
         };
@@ -83,11 +104,9 @@ impl RenderEngine {
         let mut current_y = padding_y;
 
         for (r_idx, row) in layout.rows.iter().enumerate() {
-            let is_clipboard_row = r_idx > 0
-                && !row.keys.is_empty()
-                && row.keys.iter().all(|k| k.is_clipboard);
-            let is_clipboard_bottom =
-                is_clipboard_layout && Some(r_idx) == clipboard_bottom_idx;
+            let is_clipboard_row =
+                r_idx > 0 && !row.keys.is_empty() && row.keys.iter().all(|k| k.is_clipboard);
+            let is_clipboard_bottom = is_clipboard_layout && Some(r_idx) == clipboard_bottom_idx;
             let row_height = if r_idx == 0 {
                 top_row_height
             } else if is_clipboard_bottom {
@@ -106,12 +125,22 @@ impl RenderEngine {
                     // In portrait/mobile, action buttons (clip, hide) are compact
                     (row_height * 0.95).round().min(36.0)
                 } else {
-                    ((total_width as f32 - 2.0 * padding_x - 4.0 * spacing) * (0.35 / (2.0 * 0.35 + 3.3))).round()
+                    ((total_width as f32 - 2.0 * padding_x - 4.0 * spacing)
+                        * (0.35 / (2.0 * 0.35 + 3.3)))
+                        .round()
                 };
 
                 // Left button: Clipboard
                 let x0 = padding_x;
-                row_rects.push((Rect { x: x0, y: current_y, w: action_width, h: row_height }, 0));
+                row_rects.push((
+                    Rect {
+                        x: x0,
+                        y: current_y,
+                        w: action_width,
+                        h: row_height,
+                    },
+                    0,
+                ));
 
                 // Center suggestion region
                 let center_start_x = x0 + action_width + spacing;
@@ -119,21 +148,41 @@ impl RenderEngine {
                 let center_avail_w = (right_start_x - center_start_x - spacing).max(10.0);
 
                 if num_center > 0 {
-                    let center_total_weight: f32 = row.keys[1..1 + num_center].iter().map(|k| k.width_weight).sum();
+                    let center_total_weight: f32 = row.keys[1..1 + num_center]
+                        .iter()
+                        .map(|k| k.width_weight)
+                        .sum();
                     let center_spacing_total = (num_center.saturating_sub(1)) as f32 * spacing;
                     let center_keys_avail_w = (center_avail_w - center_spacing_total).max(10.0);
 
                     let mut curr_cx = center_start_x;
                     for (c_idx, key) in row.keys[1..1 + num_center].iter().enumerate() {
-                        let w = (center_keys_avail_w * (key.width_weight / center_total_weight)).max(10.0);
-                        row_rects.push((Rect { x: curr_cx, y: current_y, w, h: row_height }, 1 + c_idx));
+                        let w = (center_keys_avail_w * (key.width_weight / center_total_weight))
+                            .max(10.0);
+                        row_rects.push((
+                            Rect {
+                                x: curr_cx,
+                                y: current_y,
+                                w,
+                                h: row_height,
+                            },
+                            1 + c_idx,
+                        ));
                         curr_cx += w + spacing;
                     }
                 }
 
                 // Right button: Hide
                 let x_hide = right_start_x;
-                row_rects.push((Rect { x: x_hide, y: current_y, w: action_width, h: row_height }, 1 + num_center));
+                row_rects.push((
+                    Rect {
+                        x: x_hide,
+                        y: current_y,
+                        w: action_width,
+                        h: row_height,
+                    },
+                    1 + num_center,
+                ));
             } else if is_clipboard_row {
                 // HeliBoard/Gboard-style clipboard chips: compact cards in a
                 // 4-column grid, NOT stretched pills. A row with only 1-2
@@ -145,7 +194,8 @@ impl RenderEngine {
                 // clipboard background. Long-text cards (weight > 1, set in
                 // `layouts.rs` for >35 chars) may span multiple cells.
                 const CLIPBOARD_MAX_COLUMNS: f32 = 4.0;
-                let grid_cell_w = ((total_width as f32 - 2.0 * padding_x
+                let grid_cell_w = ((total_width as f32
+                    - 2.0 * padding_x
                     - (CLIPBOARD_MAX_COLUMNS - 1.0) * spacing)
                     / CLIPBOARD_MAX_COLUMNS)
                     .max(10.0);
@@ -157,10 +207,15 @@ impl RenderEngine {
                 let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
                 let num_keys = row.keys.len();
                 let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
-                let explicit_key_margins: f32 = row.keys.iter().map(|k| {
-                    k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0)
-                }).sum();
-                let avail_width = total_width as f32 - (2.0 * padding_x) - base_spacing_total - explicit_key_margins;
+                let explicit_key_margins: f32 = row
+                    .keys
+                    .iter()
+                    .map(|k| k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0))
+                    .sum();
+                let avail_width = total_width as f32
+                    - (2.0 * padding_x)
+                    - base_spacing_total
+                    - explicit_key_margins;
                 // Apply vertical swipe scroll: card rows slide up, header and
                 // pinned footer stay fixed.
                 let scrolled_y = (current_y - scroll_px).max(0.0);
@@ -185,7 +240,12 @@ impl RenderEngine {
                     let final_h = key.height.unwrap_or(chip_h.min(46.0));
                     max_h_in_row = max_h_in_row.max(final_h);
                     row_rects.push((
-                        Rect { x: current_x, y: scrolled_y, w: chip_w, h: final_h },
+                        Rect {
+                            x: current_x,
+                            y: scrolled_y,
+                            w: chip_w,
+                            h: final_h,
+                        },
                         k_idx,
                     ));
                     current_x += chip_w;
@@ -197,90 +257,96 @@ impl RenderEngine {
                     }
                 }
                 used_row_h = max_h_in_row;
+            } else {
+                // Pinned footer: the clipboard bottom row (ABC/Space/Backspace)
+                // sits at the bottom edge with the standard key-row height,
+                // independent of how many card rows stack above it.
+                let base_y = if is_clipboard_bottom {
+                    clipboard_footer_y
                 } else {
-                    // Pinned footer: the clipboard bottom row (ABC/Space/Backspace)
-                    // sits at the bottom edge with the standard key-row height,
-                    // independent of how many card rows stack above it.
-                    let base_y = if is_clipboard_bottom {
-                        clipboard_footer_y
-                    } else {
-                        current_y
-                    };
-                    // Keep the footer pinned even for Y-advance bookkeeping.
-                    if is_clipboard_bottom {
-                        used_row_h = row_height;
+                    current_y
+                };
+                // Keep the footer pinned even for Y-advance bookkeeping.
+                if is_clipboard_bottom {
+                    used_row_h = row_height;
+                }
+                let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
+                let num_keys = row.keys.len();
+
+                // Sum of explicit extra margins on keys
+                let explicit_key_margins: f32 = row
+                    .keys
+                    .iter()
+                    .map(|k| k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0))
+                    .sum();
+
+                // Check if any key has explicit px width or layout has key_width
+                let has_explicit_key_w =
+                    layout.key_width.is_some() || row.keys.iter().any(|k| k.width_px.is_some());
+
+                // Gboard / HeliBoard: Row 2 has 9 keys (a-l) centered against Row 1's 10 keys (q-p).
+                // When in mobile/portrait and a row has 9 keys of weight 1.0, use the exact single-key width
+                // from a 10-key row and center the entire 9-key row with equal left and right margins!
+                let is_centered_9_key_row = !has_explicit_key_w
+                    && is_mobile
+                    && num_keys == 9
+                    && (total_weights - 9.0).abs() < 0.05
+                    && explicit_key_margins == 0.0;
+
+                if is_centered_9_key_row {
+                    let w_10 = total_width as f32 - (2.0 * padding_x) - (9.0 * spacing);
+                    let single_key_w = (w_10 / 10.0).max(10.0);
+                    let row_w = 9.0 * single_key_w + 8.0 * spacing;
+                    let indent = ((total_width as f32 - row_w) * 0.5).max(padding_x);
+
+                    let mut current_x = indent;
+                    for (k_idx, key) in row.keys.iter().enumerate() {
+                        let final_h = key.height.unwrap_or(row_height);
+                        let rect = Rect {
+                            x: current_x,
+                            y: base_y,
+                            w: single_key_w,
+                            h: final_h,
+                        };
+                        row_rects.push((rect, k_idx));
+                        current_x += single_key_w + spacing;
                     }
-                    let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
-                    let num_keys = row.keys.len();
+                } else {
+                    let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
+                    let avail_width = total_width as f32
+                        - (2.0 * padding_x)
+                        - base_spacing_total
+                        - explicit_key_margins;
+                    let mut current_x = padding_x;
 
-                    // Sum of explicit extra margins on keys
-                    let explicit_key_margins: f32 = row.keys.iter().map(|k| {
-                        k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0)
-                    }).sum();
-
-                    // Check if any key has explicit px width or layout has key_width
-                    let has_explicit_key_w = layout.key_width.is_some() || row.keys.iter().any(|k| k.width_px.is_some());
-
-                    // Gboard / HeliBoard: Row 2 has 9 keys (a-l) centered against Row 1's 10 keys (q-p).
-                    // When in mobile/portrait and a row has 9 keys of weight 1.0, use the exact single-key width
-                    // from a 10-key row and center the entire 9-key row with equal left and right margins!
-                    let is_centered_9_key_row = !has_explicit_key_w
-                        && is_mobile
-                        && num_keys == 9
-                        && (total_weights - 9.0).abs() < 0.05
-                        && explicit_key_margins == 0.0;
-
-                    if is_centered_9_key_row {
-                        let w_10 = total_width as f32 - (2.0 * padding_x) - (9.0 * spacing);
-                        let single_key_w = (w_10 / 10.0).max(10.0);
-                        let row_w = 9.0 * single_key_w + 8.0 * spacing;
-                        let indent = ((total_width as f32 - row_w) * 0.5).max(padding_x);
-
-                        let mut current_x = indent;
-                        for (k_idx, key) in row.keys.iter().enumerate() {
-                            let final_h = key.height.unwrap_or(row_height);
-                            let rect = Rect {
-                                x: current_x,
-                                y: base_y,
-                                w: single_key_w,
-                                h: final_h,
-                            };
-                            row_rects.push((rect, k_idx));
-                            current_x += single_key_w + spacing;
+                    for (k_idx, key) in row.keys.iter().enumerate() {
+                        if let Some(ml) = key.margin_left {
+                            current_x += ml;
                         }
-                    } else {
-                        let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
-                        let avail_width = total_width as f32 - (2.0 * padding_x) - base_spacing_total - explicit_key_margins;
-                        let mut current_x = padding_x;
-
-                        for (k_idx, key) in row.keys.iter().enumerate() {
-                            if let Some(ml) = key.margin_left {
-                                current_x += ml;
-                            }
-                            let key_width = if let Some(w_px) = key.width_px {
-                                w_px
-                            } else if let Some(def_kw) = layout.key_width {
-                                (def_kw * key.width_weight).max(10.0)
-                            } else {
-                                (avail_width * (key.width_weight / total_weights)).max(10.0)
-                            };
-                            let final_h = key.height.unwrap_or(row_height);
-                            let rect = Rect {
-                                x: current_x,
-                                y: base_y,
-                                w: key_width,
-                                h: final_h,
-                            };
-                            row_rects.push((rect, k_idx));
-                            current_x += key_width;
-                            if let Some(mr) = key.margin_right {
-                                current_x += mr;
-                            }
-                            if k_idx + 1 < num_keys {
-                                current_x += spacing;
-                            }
+                        let key_width = if let Some(w_px) = key.width_px {
+                            w_px
+                        } else if let Some(def_kw) = layout.key_width {
+                            (def_kw * key.width_weight).max(10.0)
+                        } else {
+                            (avail_width * (key.width_weight / total_weights)).max(10.0)
+                        };
+                        let final_h = key.height.unwrap_or(row_height);
+                        let rect = Rect {
+                            x: current_x,
+                            y: base_y,
+                            w: key_width,
+                            h: final_h,
+                        };
+                        row_rects.push((rect, k_idx));
+                        current_x += key_width;
+                        if let Some(mr) = key.margin_right {
+                            current_x += mr;
+                        }
+                        if k_idx + 1 < num_keys {
+                            current_x += spacing;
                         }
                     }
+                }
             } // end clipboard vs. normal row
 
             let v_gap = row.margin_bottom.unwrap_or(row_spacing);
@@ -309,23 +375,25 @@ impl RenderEngine {
         total_height: u32,
         theme: &Theme,
     ) -> Option<(f32, f32, f32, f32)> {
-        let has_cards = layout.rows.iter().any(|r| {
-            !r.keys.is_empty() && r.keys.iter().all(|k| k.is_clipboard)
-        });
+        let has_cards = layout
+            .rows
+            .iter()
+            .any(|r| !r.keys.is_empty() && r.keys.iter().all(|k| k.is_clipboard));
         if !has_cards {
             return None;
         }
         let base = Self::calculate_key_rects(layout, total_width, total_height, theme);
         let is_mobile = layout.is_mobile() || total_width < 600;
-        let spacing = layout.key_spacing.unwrap_or(if is_mobile { 4.0 } else { 8.0 });
+        let spacing = layout
+            .key_spacing
+            .unwrap_or(if is_mobile { 4.0 } else { 8.0 });
         let row_spacing = layout.row_spacing.unwrap_or(spacing);
 
         let mut first_card_y: Option<f32> = None;
         let mut content_bottom = 0.0f32;
         for (r_idx, row) in layout.rows.iter().enumerate() {
-            let is_card = r_idx > 0
-                && !row.keys.is_empty()
-                && row.keys.iter().all(|k| k.is_clipboard);
+            let is_card =
+                r_idx > 0 && !row.keys.is_empty() && row.keys.iter().all(|k| k.is_clipboard);
             if !is_card {
                 continue;
             }
@@ -347,8 +415,7 @@ impl RenderEngine {
             .rev()
             .find_map(|(r_idx, rects)| {
                 let row = layout.rows.get(r_idx)?;
-                let is_card =
-                    !row.keys.is_empty() && row.keys.iter().all(|k| k.is_clipboard);
+                let is_card = !row.keys.is_empty() && row.keys.iter().all(|k| k.is_clipboard);
                 if r_idx > 0 && !is_card && !rects.is_empty() {
                     Some(rects[0].0.y)
                 } else {
@@ -428,7 +495,10 @@ impl RenderEngine {
         }
         let bg_u32 = bg.to_argb_u32();
         let pixel_u32_slice: &mut [u32] = unsafe {
-            std::slice::from_raw_parts_mut(pixels.as_mut_ptr() as *mut u32, (width * height) as usize)
+            std::slice::from_raw_parts_mut(
+                pixels.as_mut_ptr() as *mut u32,
+                (width * height) as usize,
+            )
         };
         pixel_u32_slice.fill(bg_u32);
 
@@ -458,7 +528,9 @@ impl RenderEngine {
                 } else if is_suggestion_bar {
                     0.5
                 } else {
-                    key.border_width.or(layout.border_width).unwrap_or(theme.border_width)
+                    key.border_width
+                        .or(layout.border_width)
+                        .unwrap_or(theme.border_width)
                 };
 
                 let mut key_bg = if is_active {
@@ -468,7 +540,12 @@ impl RenderEngine {
                         // Highlighted best suggestion candidate in center
                         theme.key_special
                     } else {
-                        Color::rgba(theme.key_background.r, theme.key_background.g, theme.key_background.b, 120)
+                        Color::rgba(
+                            theme.key_background.r,
+                            theme.key_background.g,
+                            theme.key_background.b,
+                            120,
+                        )
                     }
                 } else if !borders_enabled && !key.is_special {
                     bg
@@ -478,7 +555,10 @@ impl RenderEngine {
                     theme.key_background
                 };
 
-                if layout.blur.unwrap_or(false) && !is_active && (!is_suggestion_bar || key.is_special) {
+                if layout.blur.unwrap_or(false)
+                    && !is_active
+                    && (!is_suggestion_bar || key.is_special)
+                {
                     let key_alpha = key
                         .opacity
                         .or(layout.key_opacity)
@@ -497,7 +577,11 @@ impl RenderEngine {
                     theme.text_color
                 };
 
-                let radius = if is_suggestion_bar { 6.0 } else { theme.key_radius };
+                let radius = if is_suggestion_bar {
+                    6.0
+                } else {
+                    theme.key_radius
+                };
 
                 // Draw key surface
                 Self::draw_rounded_rect(
@@ -512,8 +596,13 @@ impl RenderEngine {
                 );
 
                 // Draw label text
-                let base_scale = if !is_suggestion_bar && key.label.len() <= 2 { 2 } else { 1 };
-                let mut primary_scale = key.font_size
+                let base_scale = if !is_suggestion_bar && key.label.len() <= 2 {
+                    2
+                } else {
+                    1
+                };
+                let mut primary_scale = key
+                    .font_size
                     .or(layout.font_size)
                     .map(|f| f.round().max(1.0) as i32)
                     .unwrap_or(base_scale);
@@ -522,7 +611,8 @@ impl RenderEngine {
                 if !is_suggestion_bar {
                     let char_count = key.label.chars().count() as f32;
                     while primary_scale > 1 {
-                        let text_w = char_count * (8.0 * primary_scale as f32 + primary_scale as f32);
+                        let text_w =
+                            char_count * (8.0 * primary_scale as f32 + primary_scale as f32);
                         if text_w <= rect.w - 4.0 {
                             break;
                         }
@@ -543,7 +633,8 @@ impl RenderEngine {
 
                 // Draw secondary label (top-right symbol/number hint)
                 if let Some(ref sec) = key.secondary_label {
-                    let sec_scale = key.secondary_font_size
+                    let sec_scale = key
+                        .secondary_font_size
                         .or(layout.secondary_font_size)
                         .map(|f| f.round().max(1.0) as i32)
                         .unwrap_or(1);
@@ -564,14 +655,184 @@ impl RenderEngine {
                 if let Some(offset) = swipe_offset
                     && (key.label.contains("English") || key.label.contains("␣"))
                 {
-                    let indicator_x = (rect.x + (rect.w / 2.0) + offset).clamp(rect.x + 10.0, rect.x + rect.w - 10.0);
-                    Self::draw_glide_indicator(pixel_u32_slice, width, height, indicator_x, rect.y + rect.h - 6.0, theme.accent_color);
+                    let indicator_x = (rect.x + (rect.w / 2.0) + offset)
+                        .clamp(rect.x + 10.0, rect.x + rect.w - 10.0);
+                    Self::draw_glide_indicator(
+                        pixel_u32_slice,
+                        width,
+                        height,
+                        indicator_x,
+                        rect.y + rect.h - 6.0,
+                        theme.accent_color,
+                    );
                 }
             }
         }
     }
 
-    fn draw_glide_indicator(pixels: &mut [u32], stride: u32, max_h: u32, cx: f32, cy: f32, color: Color) {
+    /// Draw a time-faded, smoothed touchscreen swipe trail.
+    pub fn draw_swipe_trail(
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        points: &[(f32, f32, std::time::Instant)],
+        now: std::time::Instant,
+        color: Color,
+    ) {
+        if points.len() < 2 || width == 0 || height == 0 {
+            return;
+        }
+
+        const TRAIL_LIFETIME: f32 = 0.42;
+        const CORE_RADIUS: f32 = 2.0;
+        const HALO_RADIUS: f32 = 4.5;
+        const RASTER_MARGIN: f32 = HALO_RADIUS + 0.5;
+
+        // Keep the Catmull-Rom curve for a smooth line, but rasterize a much
+        // narrower stroke than the old 6px halo. The software SHM renderer
+        // paints this over a freshly rendered keyboard every frame.
+        for i in 0..points.len() - 1 {
+            let p0 = points[i.saturating_sub(1)];
+            let p1 = points[i];
+            let p2 = points[i + 1];
+            let p3 = points[(i + 2).min(points.len() - 1)];
+            let distance = (p2.0 - p1.0).hypot(p2.1 - p1.1);
+            let steps = (distance / 4.0).ceil().clamp(1.0, 128.0) as usize;
+            let span = p2.2.saturating_duration_since(p1.2);
+            let mut previous = p1;
+
+            for step in 1..=steps {
+                let t = step as f32 / steps as f32;
+                let t2 = t * t;
+                let t3 = t2 * t;
+                let catmull = |a: f32, b: f32, c: f32, d: f32| {
+                    0.5 * ((2.0 * b)
+                        + (-a + c) * t
+                        + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2
+                        + (-a + 3.0 * b - 3.0 * c + d) * t3)
+                };
+                let at = p1.2.checked_add(span.mul_f32(t)).unwrap_or(p1.2);
+                let current = (
+                    catmull(p0.0, p1.0, p2.0, p3.0),
+                    catmull(p0.1, p1.1, p2.1, p3.1),
+                    at,
+                );
+                Self::draw_swipe_segment(
+                    pixels,
+                    width,
+                    height,
+                    previous,
+                    current,
+                    now,
+                    color,
+                    TRAIL_LIFETIME,
+                    CORE_RADIUS,
+                    HALO_RADIUS,
+                    RASTER_MARGIN,
+                );
+                previous = current;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_swipe_segment(
+        pixels: &mut [u8],
+        width: u32,
+        height: u32,
+        from: (f32, f32, std::time::Instant),
+        to: (f32, f32, std::time::Instant),
+        now: std::time::Instant,
+        color: Color,
+        lifetime: f32,
+        core_radius: f32,
+        halo_radius: f32,
+        raster_margin: f32,
+    ) {
+        let dx = to.0 - from.0;
+        let dy = to.1 - from.1;
+        let length_squared = dx * dx + dy * dy;
+        let min_x = (from.0.min(to.0) - raster_margin).floor().max(0.0) as i32;
+        let max_x = (from.0.max(to.0) + raster_margin)
+            .ceil()
+            .min(width as f32 - 1.0) as i32;
+        let min_y = (from.1.min(to.1) - raster_margin).floor().max(0.0) as i32;
+        let max_y = (from.1.max(to.1) + raster_margin)
+            .ceil()
+            .min(height as f32 - 1.0) as i32;
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+
+        // Timestamps and source color are invariant across this tiny capsule.
+        // Precompute the time span here instead of doing Instant/Duration
+        // operations and constructing Color values for every covered pixel.
+        let start_age = now.saturating_duration_since(from.2).as_secs_f32();
+        let sample_span = to.2.saturating_duration_since(from.2).as_secs_f32();
+        let source_alpha = color.a as f32 / 255.0;
+
+        #[inline]
+        fn smooth_coverage(radius: f32, distance: f32) -> f32 {
+            let edge = (radius + 0.5 - distance).clamp(0.0, 1.0);
+            edge * edge * (3.0 - 2.0 * edge)
+        }
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let projection = if length_squared > f32::EPSILON {
+                    (((px - from.0) * dx + (py - from.1) * dy) / length_squared).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let nearest_x = from.0 + dx * projection;
+                let nearest_y = from.1 + dy * projection;
+                let pixel_dx = px - nearest_x;
+                let pixel_dy = py - nearest_y;
+                let distance = (pixel_dx * pixel_dx + pixel_dy * pixel_dy).sqrt();
+
+                let age = (start_age - sample_span * projection).max(0.0);
+                if age >= lifetime {
+                    continue;
+                }
+                let remaining = 1.0 - age / lifetime;
+                let fade = remaining * remaining * (3.0 - 2.0 * remaining);
+                let core = 218.0 * smooth_coverage(core_radius, distance);
+                let halo = 58.0 * smooth_coverage(halo_radius, distance);
+                let alpha = (core.max(halo) * fade * source_alpha) as u32;
+                if alpha == 0 {
+                    continue;
+                }
+
+                let offset = ((y as usize * width as usize) + x as usize) * 4;
+                let Some(pixel) = pixels.get_mut(offset..offset + 4) else {
+                    continue;
+                };
+                let packed = u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+                let inverse_alpha = 255 - alpha;
+                let red = ((color.r as u32 * alpha + ((packed >> 16) & 255) * inverse_alpha + 127)
+                    / 255)
+                    .min(255);
+                let green =
+                    ((color.g as u32 * alpha + ((packed >> 8) & 255) * inverse_alpha + 127) / 255)
+                        .min(255);
+                let blue = ((color.b as u32 * alpha + (packed & 255) * inverse_alpha + 127) / 255)
+                    .min(255);
+                let blended = (255 << 24) | (red << 16) | (green << 8) | blue;
+                pixel.copy_from_slice(&blended.to_ne_bytes());
+            }
+        }
+    }
+
+    fn draw_glide_indicator(
+        pixels: &mut [u32],
+        stride: u32,
+        max_h: u32,
+        cx: f32,
+        cy: f32,
+        color: Color,
+    ) {
         let col_u32 = color.to_argb_u32();
         let ix = cx as i32;
         let iy = cy as i32;
@@ -624,26 +885,35 @@ impl RenderEngine {
                 if in_corner_tl {
                     let dx = fx - (rect.x + radius);
                     let dy = fy - (rect.y + radius);
-                    if (dx * dx + dy * dy) > r2 { is_inside = false; }
+                    if (dx * dx + dy * dy) > r2 {
+                        is_inside = false;
+                    }
                 } else if in_corner_tr {
                     let dx = fx - (rect.x + rect.w - radius);
                     let dy = fy - (rect.y + radius);
-                    if (dx * dx + dy * dy) > r2 { is_inside = false; }
+                    if (dx * dx + dy * dy) > r2 {
+                        is_inside = false;
+                    }
                 } else if in_corner_bl {
                     let dx = fx - (rect.x + radius);
                     let dy = fy - (rect.y + rect.h - radius);
-                    if (dx * dx + dy * dy) > r2 { is_inside = false; }
+                    if (dx * dx + dy * dy) > r2 {
+                        is_inside = false;
+                    }
                 } else if in_corner_br {
                     let dx = fx - (rect.x + rect.w - radius);
                     let dy = fy - (rect.y + rect.h - radius);
-                    if (dx * dx + dy * dy) > r2 { is_inside = false; }
+                    if (dx * dx + dy * dy) > r2 {
+                        is_inside = false;
+                    }
                 }
 
                 if is_inside {
-                    let is_border = border_w > 0.0 && (
-                        fx < rect.x + border_w || fx > rect.x + rect.w - border_w ||
-                        fy < rect.y + border_w || fy > rect.y + rect.h - border_w
-                    );
+                    let is_border = border_w > 0.0
+                        && (fx < rect.x + border_w
+                            || fx > rect.x + rect.w - border_w
+                            || fy < rect.y + border_w
+                            || fy > rect.y + rect.h - border_w);
                     let idx = (y * stride + x) as usize;
                     if idx < pixels.len() {
                         pixels[idx] = if is_border { border_u32 } else { col_u32 };

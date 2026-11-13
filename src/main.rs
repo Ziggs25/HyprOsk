@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
 #[command(name = "hyprosk")]
@@ -76,15 +76,15 @@ enum Commands {
     /// Reload configuration from ~/.config/hyprosk/config.toml
     Reload,
     /// Switch active keyboard layer (lower, upper, symbols)
-    Layer {
-        name: String,
-    },
+    Layer { name: String },
     /// Toggle clipboard history view
     Clipboard,
     /// Print folio/keyboard detection diagnostics for debugging
     Status,
     /// Stop the running HyprOsk daemon
     Quit,
+    /// Show HyprOsk and swipe engine attributions
+    About,
     /// Compile an AOSP .combined wordlist into a fast binary .hyprosk.dict file
     CompileDict {
         /// Path to the input .combined wordlist
@@ -105,6 +105,9 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    #[cfg(feature = "futo-swipe")]
+    tracing::info!("Swipe typing powered by FUTO Swipe");
+
     match cli.command {
         None => {
             hyprosk::run_daemon(cli.config.as_deref())?;
@@ -113,7 +116,12 @@ fn main() -> anyhow::Result<()> {
             let conf_path = config.as_deref().or(cli.config.as_deref());
             hyprosk::run_daemon(conf_path)?;
         }
-        Some(Commands::Show { tiled, floating, mobile, desktop }) => {
+        Some(Commands::Show {
+            tiled,
+            floating,
+            mobile,
+            desktop,
+        }) => {
             let cmd = if mobile {
                 "show --mobile"
             } else if desktop {
@@ -132,7 +140,12 @@ fn main() -> anyhow::Result<()> {
             let resp = hyprosk::ipc::IpcServer::send_command("hide")?;
             println!("{}", resp.trim());
         }
-        Some(Commands::Toggle { tiled, floating, mobile, desktop }) => {
+        Some(Commands::Toggle {
+            tiled,
+            floating,
+            mobile,
+            desktop,
+        }) => {
             let cmd = if mobile {
                 "toggle --mobile"
             } else if desktop {
@@ -185,16 +198,35 @@ fn main() -> anyhow::Result<()> {
             let status = hyprosk::folio::FolioStatus::detect();
             println!("folio USB (044e:1218):       {}", status.usb_folio);
             println!("tablet_mode (SW_TABLET_MODE): {}", status.tablet_mode);
-            println!("evdev letter-key keyboard:   {}", status.evdev_keyboard);
-            println!("/proc kbd-letter keyboard:   {}", status.proc_keyboard);
+            println!("external keyboard:           {}", status.external_keyboard);
+            println!("built-in i8042/acpi keyboard:{}", status.builtin_keyboard);
             println!("folio attached (verdict):    {}", status.attached);
             println!("folio source:                {}", status.source.label());
             let config = hyprosk::config::Config::load_or_create(cli.config.as_deref());
-            println!("folio_mode (config):         {}", config.behavior.folio_mode);
-            println!("auto-show will be:           {}", if !config.behavior.folio_mode || !status.attached { "ENABLED" } else { "SUPPRESSED" });
-            if config.behavior.folio_mode && status.source == hyprosk::folio::FolioSource::UsbFolio {
+            println!(
+                "folio_mode (config):         {}",
+                config.behavior.folio_mode
+            );
+            println!(
+                "auto-show will be:           {}",
+                if !config.behavior.folio_mode || !status.attached {
+                    "ENABLED"
+                } else {
+                    "SUPPRESSED"
+                }
+            );
+            if status.builtin_keyboard && !status.external_keyboard {
+                println!(
+                    "note: the built-in i8042/ACPI keyboard keeps letter keys after the folio"
+                );
+                println!("      is removed, so it never counts as an attachment on its own.");
+            }
+            if config.behavior.folio_mode && status.source == hyprosk::folio::FolioSource::UsbFolio
+            {
                 println!("note: 044e:1218 stays powered when the folio is folded 360 degrees,");
-                println!("      so this device cannot be told apart from laptop posture by USB ID.");
+                println!(
+                    "      so this device cannot be told apart from laptop posture by USB ID."
+                );
                 println!("      Use 'hyprosk toggle' or 'hyprosk hide' in that posture.");
             }
         }
@@ -202,11 +234,30 @@ fn main() -> anyhow::Result<()> {
             let resp = hyprosk::ipc::IpcServer::send_command("quit")?;
             println!("{}", resp.trim());
         }
-        Some(Commands::CompileDict { input, output, max_words }) => {
-            println!("Compiling {:?} -> {:?} (max {} words)...", input, output, max_words);
-            let (words, bigrams, size) = hyprosk::suggest::compiler::compile_combined(&input, &output, max_words, 3)?;
-            println!("Success! Compiled {} words and {} bigrams into binary dictionary ({:.2} MB).",
-                words, bigrams, size as f64 / (1024.0 * 1024.0));
+        Some(Commands::About) => {
+            println!("HyprOsk — native Wayland on-screen keyboard");
+            #[cfg(feature = "futo-swipe")]
+            println!("Swipe typing powered by FUTO Swipe technology.");
+            #[cfg(not(feature = "futo-swipe"))]
+            println!("Swipe typing uses the geometric fallback engine in this build.");
+        }
+        Some(Commands::CompileDict {
+            input,
+            output,
+            max_words,
+        }) => {
+            println!(
+                "Compiling {:?} -> {:?} (max {} words)...",
+                input, output, max_words
+            );
+            let (words, bigrams, size) =
+                hyprosk::suggest::compiler::compile_combined(&input, &output, max_words, 3)?;
+            println!(
+                "Success! Compiled {} words and {} bigrams into binary dictionary ({:.2} MB).",
+                words,
+                bigrams,
+                size as f64 / (1024.0 * 1024.0)
+            );
         }
     }
 

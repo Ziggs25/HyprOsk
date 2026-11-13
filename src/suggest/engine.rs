@@ -37,10 +37,6 @@ impl SuggestEngine {
         }
     }
 
-    pub fn swipe_candidates(&self, path: &[char]) -> Vec<String> {
-        crate::suggest::swipe::swipe_candidates(path, &self.dictionary)
-    }
-
     pub fn push_char(&mut self, ch: char) {
         if ch.is_alphabetic() || ch == '\'' {
             if self.is_next_word_mode {
@@ -134,7 +130,11 @@ impl SuggestEngine {
             } else {
                 self.clear();
             }
-        } else if before.chars().last().is_some_and(|c| !c.is_alphabetic() && c != '\'') {
+        } else if before
+            .chars()
+            .last()
+            .is_some_and(|c| !c.is_alphabetic() && c != '\'')
+        {
             // Cursor is directly after punctuation or symbol (e.g. '.', '/', ':')
             self.word_history = words;
             self.current_word.clear();
@@ -255,7 +255,12 @@ impl SuggestEngine {
         let format_case = |word: &str| -> String {
             if self.current_word.chars().all(|c| c.is_uppercase()) && self.current_word.len() > 1 {
                 word.to_uppercase()
-            } else if self.current_word.chars().next().is_some_and(|c| c.is_uppercase()) {
+            } else if self
+                .current_word
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_uppercase())
+            {
                 let mut c = word.chars();
                 match c.next() {
                     None => String::new(),
@@ -274,7 +279,10 @@ impl SuggestEngine {
             }
         }
 
-        let top_candidate = pool.first().cloned().unwrap_or_else(|| self.current_word.clone());
+        let top_candidate = pool
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.current_word.clone());
 
         let mut slots = Vec::with_capacity(3);
 
@@ -301,9 +309,9 @@ impl SuggestEngine {
             if right.is_empty() {
                 right = left.clone();
             }
-            slots.push(left);          // Slot 0 (Left)
-            slots.push(top_candidate);  // Slot 1 (Center)
-            slots.push(right);         // Slot 2 (Right)
+            slots.push(left); // Slot 0 (Left)
+            slots.push(top_candidate); // Slot 1 (Center)
+            slots.push(right); // Slot 2 (Right)
         } else {
             // Case B: Top candidate is an autocorrect / contraction / completion
             // e.g. typed "cant" -> top is "can't", typed "dont" -> top is "don't", typed "omw" -> top is "on my way"
@@ -322,9 +330,9 @@ impl SuggestEngine {
             if right.is_empty() {
                 right = center.clone();
             }
-            slots.push(left);   // Slot 0 (Left)
+            slots.push(left); // Slot 0 (Left)
             slots.push(center); // Slot 1 (Center)
-            slots.push(right);  // Slot 2 (Right)
+            slots.push(right); // Slot 2 (Right)
         }
 
         self.candidates = slots;
@@ -354,7 +362,10 @@ mod tests {
         engine.on_word_selected("how");
         assert!(engine.is_next_word_mode);
         assert_eq!(engine.candidates.len(), 3);
-        assert!(engine.candidates.contains(&"are".to_string()) || engine.candidates.contains(&"is".to_string()));
+        assert!(
+            engine.candidates.contains(&"are".to_string())
+                || engine.candidates.contains(&"is".to_string())
+        );
 
         // Next word selection: "how" -> "are"
         engine.on_word_selected("are");
@@ -405,7 +416,10 @@ mod tests {
         // 2. Select "update" from suggestions (sends "update ")
         engine.on_word_selected("update");
         assert_eq!(engine.current_word, "");
-        assert_eq!(engine.word_history.last().map(|s| s.as_str()), Some("update"));
+        assert_eq!(
+            engine.word_history.last().map(|s| s.as_str()),
+            Some("update")
+        );
 
         // 3. 1st backspace deletes trailing space in text field -> restores "update"
         engine.pop_char();
@@ -473,9 +487,9 @@ mod tests {
         }
         assert_eq!(engine.current_word, "cant");
         assert_eq!(engine.candidates.len(), 3);
-        assert_eq!(engine.candidates[0], "cant");      // Left: raw literal
-        assert_eq!(engine.candidates[1], "can't");     // Center: punctuation contraction
-        assert_eq!(engine.candidates[2], "cannot");    // Right: alternative
+        assert_eq!(engine.candidates[0], "cant"); // Left: raw literal
+        assert_eq!(engine.candidates[1], "can't"); // Center: punctuation contraction
+        assert_eq!(engine.candidates[2], "cannot"); // Right: alternative
 
         // Type "dont"
         engine.clear();
@@ -483,9 +497,9 @@ mod tests {
             engine.push_char(c);
         }
         assert_eq!(engine.candidates.len(), 3);
-        assert_eq!(engine.candidates[0], "dont");      // Left: raw literal
-        assert_eq!(engine.candidates[1], "don't");     // Center: punctuation contraction
-        assert_eq!(engine.candidates[2], "done");      // Right: alternative
+        assert_eq!(engine.candidates[0], "dont"); // Left: raw literal
+        assert_eq!(engine.candidates[1], "don't"); // Center: punctuation contraction
+        assert_eq!(engine.candidates[2], "done"); // Right: alternative
 
         // Type "omw"
         engine.clear();
@@ -493,9 +507,9 @@ mod tests {
             engine.push_char(c);
         }
         assert_eq!(engine.candidates.len(), 3);
-        assert_eq!(engine.candidates[0], "omw");        // Left: raw literal
-        assert_eq!(engine.candidates[1], "on my way");  // Center: shortcut expansion
-        assert_eq!(engine.candidates[2], "omg");        // Right: alternative
+        assert_eq!(engine.candidates[0], "omw"); // Left: raw literal
+        assert_eq!(engine.candidates[1], "on my way"); // Center: shortcut expansion
+        assert_eq!(engine.candidates[2], "omg"); // Right: alternative
     }
 
     #[test]
