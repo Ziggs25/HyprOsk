@@ -145,17 +145,22 @@ export global OskIcons {
 
 component KeyVisual {
     in property <Key> k;
+    in property <length> origin-y: 0px;
+    in property <bool> clip-card-items: false;
 
     width: k.w;
     height: k.h;
     x: k.x;
-    y: k.y;
+    y: k.y - root.origin-y;
 
     property <bool> is-clipboard: k.key-type == KeyType.clipboard-header
                                 || k.key-type == KeyType.clipboard-back
                                 || k.key-type == KeyType.clipboard-item;
 
-    visible: !(k.key-type == KeyType.suggestion && k.label == "");
+    property <bool> is-clipboard-item: k.key-type == KeyType.clipboard-item;
+    visible: root.clip-card-items
+        ? root.is-clipboard-item
+        : (!root.is-clipboard-item && !(k.key-type == KeyType.suggestion && k.label == ""));
     opacity: (k.key-type == KeyType.suggestion && k.label == "") ? 0.0 : 1.0;
 
     if k.key-type == KeyType.clipboard-header : Rectangle {
@@ -198,14 +203,14 @@ component KeyVisual {
         width: k.w - (k.is-pressed ? 2px : 0px);
         height: k.h - (k.is-pressed ? 2px : 0px);
         background: k.is-pressed ? OskTheme.key-bg-pressed : OskTheme.key-bg;
-        border-radius: 14px;
+        border-radius: 16px;
         Text {
-            x: 10px; y: 8px; width: parent.width - 20px; height: parent.height - 16px;
+            x: 12px; y: 10px; width: parent.width - 36px; height: parent.height - 20px;
             text: k.label;
-            font-size: 15px;
+            font-size: 17px;
             color: k.is-pressed ? OskTheme.text-color-pressed : OskTheme.text-color;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+            horizontal-alignment: left;
+            vertical-alignment: top;
             wrap: word-wrap;
         }
         Image {
@@ -316,6 +321,11 @@ export component OskUi inherits Window {
     in property <bool> show-clipboard: false;
     in property <bool> clipboard-scrollbar-visible: false;
     in property <float> clipboard-scroll-ratio: 0;
+    in property <length> clipboard-panel-top: 0px;
+    in property <length> clipboard-panel-height: 0px;
+    in property <length> clipboard-viewport-top: 0px;
+    in property <length> clipboard-viewport-height: 0px;
+    in property <length> clipboard-scrollbar-travel: 0px;
     in property <bool> hold-preview-visible: false;
     in property <string> hold-preview-label: "";
     in property <length> hold-preview-x;
@@ -328,30 +338,44 @@ export component OskUi inherits Window {
     }
 
     Rectangle {
-        visible: root.show-clipboard;
+        visible: root.show-clipboard && root.clipboard-viewport-height > 0px;
         x: 8px;
-        y: 62px;
+        y: root.clipboard-panel-top;
         width: parent.width - 16px;
-        height: parent.height - 70px;
+        height: root.clipboard-panel-height;
         background: OskTheme.clipboard-bg;
         border-radius: 14px;
     }
 
-    // Floating scrollbar indicator pill on the LEFT edge of the clipboard
-    // view. Tracks vertical swipe scroll progress (0 = top, 1 = bottom).
-    Rectangle {
-        visible: root.show-clipboard && root.clipboard-scrollbar-visible;
-        x: 12px;
-        y: 66px + root.clipboard-scroll-ratio * (parent.height - 70px - 44px);
-        width: 4px;
-        height: 36px;
-        background: OskTheme.accent-color;
-        border-radius: 2px;
-        opacity: 0.85;
+    for k in root.keys: KeyVisual {
+        k: k;
     }
 
-    for k in keys: KeyVisual {
-        k: k;
+    Rectangle {
+        x: 0px;
+        y: root.clipboard-viewport-top;
+        width: parent.width;
+        height: root.clipboard-viewport-height;
+        clip: true;
+        background: transparent;
+
+        for k in root.keys: KeyVisual {
+            k: k;
+            origin-y: root.clipboard-viewport-top;
+            clip-card-items: true;
+        }
+
+        // Keep the indicator inside the same bounds as card drawing and taps.
+        Rectangle {
+            visible: root.show-clipboard && root.clipboard-scrollbar-visible;
+            x: 12px;
+            y: root.clipboard-scroll-ratio * root.clipboard-scrollbar-travel;
+            width: 4px;
+            height: 36px;
+            background: OskTheme.accent-color;
+            border-radius: 2px;
+            opacity: 0.85;
+        }
     }
 
     Rectangle {

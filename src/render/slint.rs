@@ -529,15 +529,27 @@ impl SlintScene {
 
             // Floating scrollbar state for the clipboard view (LEFT pill in
             // `ui/osk.slint`). Visible only when the card grid overflows.
-            let (has_scroll, ratio) = if show_clipboard {
-                let max = RenderEngine::clipboard_scroll_metrics(layout, width, height, theme)
-                    .map(|(_, _, _, m)| m)
-                    .unwrap_or(0.0);
-                if max > 0.5 {
-                    (true, (clipboard_scroll_y / max).clamp(0.0, 1.0))
-                } else {
-                    (false, 0.0)
-                }
+            let clipboard_metrics = if show_clipboard {
+                RenderEngine::clipboard_scroll_metrics(layout, width, height, theme)
+            } else {
+                None
+            };
+            let (viewport_top, viewport_height, max_scroll) = clipboard_metrics
+                .map(|(top, height, _, max)| (top, height, max))
+                .unwrap_or((0.0, 0.0, 0.0));
+            self.ui.set_clipboard_panel_top(
+                viewport_top - RenderEngine::CLIPBOARD_VERTICAL_INSET,
+            );
+            self.ui.set_clipboard_panel_height(
+                viewport_height + 2.0 * RenderEngine::CLIPBOARD_VERTICAL_INSET,
+            );
+            self.ui.set_clipboard_viewport_top(viewport_top);
+            self.ui.set_clipboard_viewport_height(viewport_height);
+            self.ui
+                .set_clipboard_scrollbar_travel((viewport_height - 36.0).max(0.0));
+
+            let (has_scroll, ratio) = if max_scroll > 0.5 && viewport_height > 0.0 {
+                (true, (clipboard_scroll_y / max_scroll).clamp(0.0, 1.0))
             } else {
                 (false, 0.0)
             };

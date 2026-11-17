@@ -50,6 +50,20 @@ instead of creating an unusable input-method object.
    surrounding-text snapshots. When explicitly enabled (`surrounding_text_readback = true`),
    surrounding text is read only when supported by the host.
 
+## Responsive clipboard grid check
+
+1. Open clipboard history and resize the keyboard through phone, tablet, and
+   wide landscape widths. Cards should reflow from one to four columns, with
+   four columns at 1920px, a 12px inset from each panel edge, and a 12px
+   gap between cards. The first card should sit 12px below the panel top; at
+   maximum scroll, the last card should sit 12px above the panel bottom. Wide
+   landscape cards should be wider.
+2. Drag the card grid past the top and bottom. Cards must stay clipped between
+   the fixed header and footer; tapping the header or footer must never select a
+   card underneath them.
+3. Use a very short keyboard height. If the header and footer leave no card
+   viewport, cards must be hidden and have no hit targets.
+
 ## Swipe typing check
 
 FUTO-enabled builds use the `honorable_sturgeon` int8 encoder and a Rust CTC
