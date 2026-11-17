@@ -75,6 +75,7 @@ export global OskIcons {
     in-out property <image> shift;
     in-out property <image> capslock;
     in-out property <image> win;
+    in-out property <image> tab;
     in-out property <image> mic;
     in-out property <image> arrow-l;
     in-out property <image> arrow-r;
@@ -111,6 +112,7 @@ export global OskIcons {
         if (code == 3) { return shift; }
         if (code == 34) { return capslock; }
         if (code == 4) { return win; }
+        if (code == 35) { return tab; }
         if (code == 5) { return mic; }
         if (code == 6) { return arrow-l; }
         if (code == 7) { return arrow-r; }
@@ -245,10 +247,13 @@ component KeyVisual {
 
         Image {
             visible: k.icon > 0 && k.key-type != KeyType.suggestion;
-            x: (parent.width - OskTheme.icon-size) / 2;
-            y: (parent.height - OskTheme.icon-size) / 2;
-            width: OskTheme.icon-size;
-            height: OskTheme.icon-size;
+            property <length> display-size: OskTheme.icon-size
+                + (((k.icon == 1) || (k.icon == 2) || (k.icon == 3)
+                    || (k.icon == 4) || (k.icon == 34)) ? 4px : 0px);
+            x: (parent.width - display-size) / 2;
+            y: (parent.height - display-size) / 2;
+            width: display-size;
+            height: display-size;
             source: OskIcons.get(k.icon);
             colorize: k.is-pressed
                 ? (k.has-custom-icon-pressed

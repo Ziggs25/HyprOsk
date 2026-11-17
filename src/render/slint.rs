@@ -92,22 +92,24 @@ pub mod icon {
     pub const QUESTIONDOWN: i32 = 32;
     pub const PIN: i32 = 33;
     pub const CAPSLOCK: i32 = 34;
+    pub const TAB: i32 = 35;
 }
 
-const BACKSPACE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H7.07L2.4 12l4.66-7H22v14zm-11.59-2L14 13.41 17.59 17 19 15.59 15.41 12 19 8.41 17.59 7 14 10.59 10.41 7 9 8.41 12.59 12 9 15.59z"/></svg>"##;
-const ENTER_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M19 7v4H5.83l3.58-3.59L8 6l-6 6 6 6 1.41-1.41L5.83 13H21V7h-2z"/></svg>"##;
-const SHIFT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="#ffffff" stroke-width="2" d="M4 15h6v5h4v-5h6L12 4 4 15z"/></svg>"##;
+const BACKSPACE_SVG: &str = include_str!("../../assets/keyboard-icons/backspace.svg");
+const ENTER_SVG: &str = include_str!("../../assets/keyboard-icons/return-key.svg");
+const SHIFT_SVG: &str = include_str!("../../assets/keyboard-icons/shift-hold.svg");
 const CAPSLOCK_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 14h6v3h4v-3h6L12 3 4 14zm-1 7h18"/></svg>"##;
-const WIN_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/></svg>"##;
+const WIN_SVG: &str = include_str!("../../assets/keyboard-icons/super-key-2.svg");
+const TAB_SVG: &str = include_str!("../../assets/keyboard-icons/tab-key.svg");
 const MIC_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-2.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>"##;
-const ARROW_L_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>"##;
-const ARROW_R_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M8.59 16.59 10 18l6-6-6-6-1.41 1.41L13.17 12z"/></svg>"##;
-const ARROW_U_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M7.41 15.41 12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>"##;
-const ARROW_D_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>"##;
+const ARROW_L_SVG: &str = include_str!("../../assets/keyboard-icons/left-arrow.svg");
+const ARROW_R_SVG: &str = include_str!("../../assets/keyboard-icons/right-arrow.svg");
+const ARROW_U_SVG: &str = include_str!("../../assets/keyboard-icons/up-arrow.svg");
+const ARROW_D_SVG: &str = include_str!("../../assets/keyboard-icons/down-arrow.svg");
 const GEAR_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.58-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>"##;
 const PALETTE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61.35.43.91.66 1.46.54.51-.11.89-.52.94-1.04.08-.85.76-1.51 1.63-1.51h1.5c3.03 0 5.5-2.47 5.5-5.5 0-3.92-3.13-7.1-7-7.1zm-4.5 9c-.83 0-1.5-.67-1.5-1.5S6.67 9 7.5 9 9 9.67 9 10.5 8.33 12 7.5 12zm3-4C9.67 8 9 7.33 9 6.5S9.67 5 10.5 5s1.5.67 1.5 1.5S11.33 8 10.5 8zm3 0c-.83 0-1.5-.67-1.5-1.5S12.67 5 13.5 5s1.5.67 1.5 1.5S14.33 8 13.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S15.67 9 16.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>"##;
-const DISMISS_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>"##;
-const CLIPBOARD_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 16H5V5h2v2h10V5h2v14z"/></svg>"##;
+const DISMISS_SVG: &str = include_str!("../../assets/keyboard-icons/close-button.svg");
+const CLIPBOARD_SVG: &str = include_str!("../../assets/keyboard-icons/clipboard.svg");
 const GRAVE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="#ffffff" d="M367 410 649 784H496L170 410Z"/></svg>"##;
 const EURO_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="#ffffff" d="M1167 670V883Q1076 778 991.5 733.0Q907 688 805 688Q648 688 547.0 788.0Q446 888 414 1075H991L936 1198H398Q396 1222 395.5 1245.0Q395 1268 395 1303Q395 1335 395.5 1358.0Q396 1381 398 1405H844L788 1528H414Q446 1715 547.0 1816.0Q648 1917 805 1917Q907 1917 991.5 1872.0Q1076 1827 1167 1722V1933Q1078 2005 985.5 2041.0Q893 2077 797 2077Q560 2077 405.5 1932.0Q251 1787 211 1528H0L55 1405H194Q194 1382 193.5 1358.5Q193 1335 193 1303Q193 1268 193.5 1244.5Q194 1221 194 1198H0L55 1075H211Q251 818 406.0 673.0Q561 528 797 528Q895 528 987.5 563.5Q1080 599 1167 670Z"/></svg>"##;
 const STERLING_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><path fill="#ffffff" d="M1102 588V770Q1026 729 958.0 708.5Q890 688 829 688Q681 688 623.0 765.5Q565 843 565 1055V1270H956V1413H565V1878H1122V2048H129V1878H365V1413H166V1270H365V1032Q365 771 472.0 649.5Q579 528 811 528Q872 528 947.5 543.5Q1023 559 1102 588Z"/></svg>"##;
@@ -203,6 +205,7 @@ impl SlintScene {
         icons.set_shift(svg(SHIFT_SVG));
         icons.set_capslock(svg(CAPSLOCK_SVG));
         icons.set_win(svg(WIN_SVG));
+        icons.set_tab(svg(TAB_SVG));
         icons.set_mic(svg(MIC_SVG));
         icons.set_arrow_l(svg(ARROW_L_SVG));
         icons.set_arrow_r(svg(ARROW_R_SVG));
@@ -265,6 +268,7 @@ impl SlintScene {
                 }
             }
             KeyAction::Win => icon::WIN,
+            KeyAction::Tab => icon::TAB,
             KeyAction::ArrowLeft => icon::ARROW_L,
             KeyAction::ArrowRight => icon::ARROW_R,
             KeyAction::ArrowUp => icon::ARROW_U,
