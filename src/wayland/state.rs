@@ -1291,8 +1291,8 @@ impl WaylandState {
         }
         RenderEngine::clipboard_scroll_metrics(
             &self.layout,
-            self.width.max(100),
-            self.height.max(100),
+            self.width,
+            self.height,
             &self.theme,
         )
         .map(|(_, _, _, max)| max)
@@ -1689,7 +1689,8 @@ impl WaylandState {
         let suggestions = self.layout_suggestions();
         if self.clipboard_mode {
             let history: Vec<String> = self.clipboard_history.iter().cloned().collect();
-            let mut lay = KeyboardLayout::clipboard(&history, &suggestions);
+            let padding_x = self.custom_layout.as_ref().and_then(|custom| custom.padding_x);
+            let mut lay = KeyboardLayout::clipboard(&history, &suggestions, self.width, padding_x);
             if let Some(ref custom) = self.custom_layout {
                 lay.colors = custom.colors.as_ref().map(|c| c.resolved(&custom.m3_map));
                 lay.key_spacing = custom.key_spacing;
@@ -2472,6 +2473,30 @@ impl WaylandState {
         }
     }
 
+    fn hit_test_at<'a>(
+        layout: &'a KeyboardLayout,
+        key_rects: &[Vec<(Rect, usize)>],
+        clipboard_mode: bool,
+        width: u32,
+        height: u32,
+        theme: &Theme,
+        x: f64,
+        y: f64,
+    ) -> Option<(usize, usize, &'a crate::layout::key::Key)> {
+        let clipboard_viewport = if clipboard_mode {
+            RenderEngine::clipboard_scroll_metrics(layout, width, height, theme)
+                .map(|(top, height, _, _)| Rect {
+                    x: 0.0,
+                    y: top,
+                    w: width as f32,
+                    h: height,
+                })
+        } else {
+            None
+        };
+        RenderEngine::hit_test_with_clip(layout, key_rects, clipboard_viewport, x, y)
+    }
+
     fn key_rect(&self, r_idx: usize, k_idx: usize) -> Option<Rect> {
         self.key_rects
             .get(r_idx)?
@@ -3065,7 +3090,16 @@ impl PointerHandler for WaylandState {
                         self.clipboard_dragging = false;
                     }
                     if let Some((r_idx, k_idx, key)) =
-                        RenderEngine::hit_test(&self.layout, &self.key_rects, x, y)
+                        Self::hit_test_at(
+                            &self.layout,
+                            &self.key_rects,
+                            self.clipboard_mode,
+                            self.width,
+                            self.height,
+                            &self.theme,
+                            x,
+                            y,
+                        )
                     {
                         // Defer clipboard pastes to release so a vertical swipe
                         // scrolls instead of pasting.
@@ -3231,7 +3265,16 @@ impl TouchHandler for WaylandState {
             self.clipboard_dragging = false;
         }
         if let Some((r_idx, k_idx, key)) =
-            RenderEngine::hit_test(&self.layout, &self.key_rects, x, y)
+            Self::hit_test_at(
+                &self.layout,
+                &self.key_rects,
+                self.clipboard_mode,
+                self.width,
+                self.height,
+                &self.theme,
+                x,
+                y,
+            )
         {
             tracing::info!("  -> hit key {:?} at {}:{}", key.action, r_idx, k_idx);
             let swipe_start = self.active_touches.is_empty()

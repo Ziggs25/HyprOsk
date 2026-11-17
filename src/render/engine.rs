@@ -18,6 +18,9 @@ impl Rect {
 pub struct RenderEngine;
 
 impl RenderEngine {
+    /// Inset between the clipboard panel edge and the outermost cards.
+    pub const CLIPBOARD_VERTICAL_INSET: f32 = 12.0;
+
     pub fn calculate_key_rects(
         layout: &KeyboardLayout,
         total_width: u32,
@@ -184,76 +187,51 @@ impl RenderEngine {
                     1 + num_center,
                 ));
             } else if is_clipboard_row {
-                // HeliBoard/Gboard-style clipboard chips: compact cards in a
-                // 4-column grid, NOT stretched pills. A row with only 1-2
-                // history entries would otherwise expand each item across the
-                // full keyboard width (and a single row would also stretch to
-                // fill the full height). Cap item width to one full-grid cell
-                // (max ~220px desktop / ~160px mobile) and cap height so chips
-                // stay compact; left-align the row and leave leftover space as
-                // clipboard background. Long-text cards (weight > 1, set in
-                // `layouts.rs` for >35 chars) may span multiple cells.
-                const CLIPBOARD_MAX_COLUMNS: f32 = 4.0;
-                let grid_cell_w = ((total_width as f32
-                    - 2.0 * padding_x
-                    - (CLIPBOARD_MAX_COLUMNS - 1.0) * spacing)
-                    / CLIPBOARD_MAX_COLUMNS)
-                    .max(10.0);
-                let max_card_w = if is_mobile { 160.0 } else { 220.0 };
-                // Compact card height: default ~46px (set explicitly in
-                // `layouts.rs`), taller for long previews, never the
-                // stretched fill.
-                let chip_h = row_height.min(if is_mobile { 76.0 } else { 88.0 });
-                let total_weights: f32 = row.keys.iter().map(|k| k.width_weight).sum();
+                // Keep a 12px visible gap and center capped cards on very wide windows.
+                let columns =
+                    KeyboardLayout::clipboard_columns_for_width(total_width, padding_x) as f32;
+                let grid_padding_x = KeyboardLayout::clipboard_grid_padding(padding_x);
+                let available_width = (total_width as f32 - 2.0 * grid_padding_x).max(0.0);
+                let grid_width = (KeyboardLayout::CLIPBOARD_MAX_CARD_WIDTH * columns
+                    + KeyboardLayout::CLIPBOARD_CARD_GAP * (columns - 1.0))
+                    .min(available_width);
+                let grid_cell_w = ((grid_width
+                    - KeyboardLayout::CLIPBOARD_CARD_GAP * (columns - 1.0))
+                    / columns)
+                    .max(0.0);
+                let grid_left = grid_padding_x + (available_width - grid_width) / 2.0;
                 let num_keys = row.keys.len();
-                let base_spacing_total = (num_keys.saturating_sub(1)) as f32 * spacing;
-                let explicit_key_margins: f32 = row
-                    .keys
-                    .iter()
-                    .map(|k| k.margin_left.unwrap_or(0.0) + k.margin_right.unwrap_or(0.0))
-                    .sum();
-                let avail_width = total_width as f32
-                    - (2.0 * padding_x)
-                    - base_spacing_total
-                    - explicit_key_margins;
-                // Apply vertical swipe scroll: card rows slide up, header and
-                // pinned footer stay fixed.
-                let scrolled_y = (current_y - scroll_px).max(0.0);
-                let mut current_x = padding_x;
+                // Keep the full scrolled position; the card viewport clips it.
+                let scrolled_y = current_y + Self::CLIPBOARD_VERTICAL_INSET - scroll_px;
+                let mut current_x = grid_left;
                 let mut max_h_in_row = 10.0f32;
                 for (k_idx, key) in row.keys.iter().enumerate() {
                     if let Some(ml) = key.margin_left {
                         current_x += ml;
                     }
-                    let stretched_w = if let Some(w_px) = key.width_px {
-                        w_px
-                    } else if let Some(def_kw) = layout.key_width {
-                        (def_kw * key.width_weight).max(10.0)
-                    } else {
-                        (avail_width * (key.width_weight / total_weights)).max(10.0)
-                    };
-                    // Default cards cap to one cell (~220/160); long-text
-                    // cards (weight 2.0) may span two cells.
-                    let weight_cap = grid_cell_w * key.width_weight.max(1.0);
-                    let max_cap = max_card_w * key.width_weight.max(1.0);
-                    let chip_w = stretched_w.min(weight_cap).min(max_cap);
-                    let final_h = key.height.unwrap_or(chip_h.min(46.0));
+                    let column_span = key.width_weight.round().max(1.0).min(columns);
+                    let slot_w = grid_cell_w * column_span
+                        + KeyboardLayout::CLIPBOARD_CARD_GAP * (column_span - 1.0);
+                    let chip_w =
+                        slot_w.min(KeyboardLayout::CLIPBOARD_MAX_CARD_WIDTH * column_span);
+                    let card_x = current_x + (slot_w - chip_w) / 2.0;
+                    let final_h = key.height.unwrap_or(row_height.min(168.0));
                     max_h_in_row = max_h_in_row.max(final_h);
                     row_rects.push((
                         Rect {
-                            x: current_x,
+                            x: card_x,
                             y: scrolled_y,
                             w: chip_w,
                             h: final_h,
                         },
                         k_idx,
                     ));
-                    current_x += chip_w;
+                    current_x += slot_w;
                     if let Some(mr) = key.margin_right {
                         current_x += mr;
                     }
                     if k_idx + 1 < num_keys {
-                        current_x += spacing;
+                        current_x += KeyboardLayout::CLIPBOARD_CARD_GAP;
                     }
                 }
                 used_row_h = max_h_in_row;
@@ -365,9 +343,9 @@ impl RenderEngine {
     /// unscrolled (`scroll_px == 0`) geometry.
     ///
     /// Returns `(viewport_top, viewport_h, content_h, max_scroll)` where
-    /// `viewport_top` is the Y of the first card row, `viewport_h` the visible
-    /// height above the pinned footer, `content_h` the stacked height of all
-    /// card rows, and `max_scroll = (content_h - viewport_h).max(0)`.
+    /// `viewport_top` is the top of the first card row, `viewport_h` the visible
+    /// height above the pinned footer and bottom panel inset, `content_h` the
+    /// stacked height of all card rows, and `max_scroll = (content_h - viewport_h).max(0)`.
     /// Returns `None` when the layout has no clipboard card rows.
     pub fn clipboard_scroll_metrics(
         layout: &KeyboardLayout,
@@ -423,15 +401,33 @@ impl RenderEngine {
                 }
             })
             .unwrap_or(total_height as f32);
-        let viewport_h = (footer_top - viewport_top - row_spacing).max(10.0);
+        let viewport_h = (footer_top
+            - viewport_top
+            - row_spacing
+            - Self::CLIPBOARD_VERTICAL_INSET)
+            .max(0.0);
         let content_h = (content_bottom - viewport_top).max(0.0);
-        let max_scroll = (content_h - viewport_h).max(0.0);
+        let max_scroll = if viewport_h > 0.0 {
+            (content_h - viewport_h).max(0.0)
+        } else {
+            0.0
+        };
         Some((viewport_top, viewport_h, content_h, max_scroll))
     }
 
     pub fn hit_test<'a>(
         layout: &'a KeyboardLayout,
         key_rects: &[Vec<(Rect, usize)>],
+        x: f64,
+        y: f64,
+    ) -> Option<(usize, usize, &'a Key)> {
+        Self::hit_test_with_clip(layout, key_rects, None, x, y)
+    }
+
+    pub fn hit_test_with_clip<'a>(
+        layout: &'a KeyboardLayout,
+        key_rects: &[Vec<(Rect, usize)>],
+        clipboard_viewport: Option<Rect>,
         x: f64,
         y: f64,
     ) -> Option<(usize, usize, &'a Key)> {
@@ -466,6 +462,19 @@ impl RenderEngine {
         }
 
         for (r_idx, row_rects) in key_rects.iter().enumerate() {
+            let is_clipboard_card = has_clipboard
+                && layout
+                    .rows
+                    .get(r_idx)
+                    .map(|row| !row.keys.is_empty() && row.keys.iter().all(|key| key.is_clipboard))
+                    .unwrap_or(false);
+            if is_clipboard_card
+                && clipboard_viewport.is_some_and(|viewport| {
+                    viewport.w <= 0.0 || viewport.h <= 0.0 || !viewport.contains(px, py)
+                })
+            {
+                continue;
+            }
             for (rect, k_idx) in row_rects {
                 if rect.contains(px, py)
                     && let Some(row) = layout.rows.get(r_idx)

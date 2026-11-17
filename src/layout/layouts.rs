@@ -152,14 +152,36 @@ impl KeyboardLayout {
     /// tapping an entry pastes it.
     /// Last row: ABC (back to letters) · Space · ⌫ (standard key row).
     ///
-    /// HeliBoard/Gboard-style chips: entries are laid out in a
-    /// [`CLIPBOARD_MAX_COLUMNS`]-column grid. Geometry is capped in
-    /// `RenderEngine::calculate_key_rects` so a row with only 1-2 entries
-    /// renders as compact left-aligned cards (one full-grid cell each) rather
-    /// than stretching across the entire keyboard width.
+    /// Clipboard cards reflow between one and four columns as the window width changes.
     pub const CLIPBOARD_MAX_COLUMNS: usize = 4;
+    pub const CLIPBOARD_PANEL_PADDING: f32 = 8.0;
+    pub const CLIPBOARD_SIDE_INSET: f32 = 12.0;
+    pub const CLIPBOARD_CARD_GAP: f32 = 12.0;
+    pub const CLIPBOARD_MIN_CARD_WIDTH: f32 = 210.0;
+    pub const CLIPBOARD_MAX_CARD_WIDTH: f32 = 520.0;
+
+    pub fn clipboard_grid_padding(padding_x: f32) -> f32 {
+        padding_x.max(Self::CLIPBOARD_PANEL_PADDING) + Self::CLIPBOARD_SIDE_INSET
+    }
+
+    pub fn clipboard_columns_for_width(total_width: u32, padding_x: f32) -> usize {
+        let grid_padding_x = Self::clipboard_grid_padding(padding_x);
+        let available_width = (total_width as f32 - 2.0 * grid_padding_x).max(0.0);
+        let columns = ((available_width + Self::CLIPBOARD_CARD_GAP)
+            / (Self::CLIPBOARD_MIN_CARD_WIDTH + Self::CLIPBOARD_CARD_GAP))
+            .floor() as usize;
+        columns.clamp(1, Self::CLIPBOARD_MAX_COLUMNS)
+    }
+
     #[allow(clippy::needless_lifetimes)]
-    pub fn clipboard(history: &[String], suggestions: &[String]) -> Self {
+    pub fn clipboard(
+        history: &[String],
+        suggestions: &[String],
+        width: u32,
+        padding_x: Option<f32>,
+    ) -> Self {
+        let padding_x = padding_x.unwrap_or(if width < 600 { 3.5 } else { 8.0 });
+        let columns = Self::clipboard_columns_for_width(width, padding_x);
         // Row 0: Top action bar.
         // Key 0: ◀ Back (KeyAction::Clipboard)
         // Middle: suggestions (or "Clipboard History" title if none)
@@ -180,25 +202,16 @@ impl KeyboardLayout {
 
         let mut rows = vec![KeyboardRow::new(top_keys)];
         let mut idx = 0usize;
-        for chunk in history.chunks(Self::CLIPBOARD_MAX_COLUMNS) {
+        for chunk in history.chunks(columns) {
             let row_keys: Vec<Key> = chunk
                 .iter()
                 .map(|text| {
                     let label = clipboard_label(text);
-                    // Long entries (>35 chars) auto-adjust: span 2 columns
-                    // with a taller card so the 75-char preview stays readable.
-                    // Default cards stay compact at ~46px height.
-                    let is_long = text.chars().count() > 35;
-                    let (weight, height) = if is_long {
-                        (2.0, 52.0)
-                    } else {
-                        (1.0, 46.0)
-                    };
                     let mut key = Key::new(label, KeyAction::ClipboardItem(idx))
                         .special()
                         .clipboard()
-                        .with_weight(weight)
-                        .with_height(height);
+                        .with_weight(1.0)
+                        .with_height(168.0);
                     if idx == 0 {
                         key = key.pinned();
                     }
@@ -206,7 +219,9 @@ impl KeyboardLayout {
                     key
                 })
                 .collect();
-            rows.push(KeyboardRow::new(row_keys));
+            let mut row = KeyboardRow::new(row_keys);
+            row.margin_bottom = Some(16.0);
+            rows.push(row);
         }
 
         // Bottom row: ABC (back to letters) · Space · Backspace.
@@ -236,11 +251,11 @@ fn clipboard_bottom_row() -> KeyboardRow {
 
 fn clipboard_label(text: &str) -> String {
     // Collapse whitespace/newlines so multi-line copies preview on one card,
-    // then show up to 75 characters instead of cutting off at 26.
+    // then show up to 180 characters in the larger square-ish preview.
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = collapsed.trim();
-    if trimmed.chars().count() > 75 {
-        let cut: String = trimmed.chars().take(75).collect();
+    if trimmed.chars().count() > 180 {
+        let cut: String = trimmed.chars().take(180).collect();
         format!("{cut}…")
     } else {
         trimmed.to_string()
