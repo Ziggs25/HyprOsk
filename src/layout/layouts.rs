@@ -56,6 +56,8 @@ pub struct KeyboardLayout {
     pub preview_font_size: Option<f32>,
     /// Optional color palette overrides
     pub colors: Option<crate::layout::custom::LayoutColors>,
+    /// Optional per-layout swipe gesture settings
+    pub swipe: Option<crate::layout::custom::SwipeConfig>,
 }
 
 impl KeyboardLayout {
@@ -142,6 +144,7 @@ impl KeyboardLayout {
             preview_height: None,
             preview_font_size: None,
             colors: None,
+            swipe: None,
         }
     }
 

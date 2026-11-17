@@ -32,6 +32,11 @@
     "preview_text_color": "#ffffff",
     "preview_border_color": "#444444"
   },
+  "swipe": {
+    "trail": {
+      "width": 20.0
+    }
+  },
   "layers": {
     "lower": [
       [

@@ -679,6 +679,9 @@ impl RenderEngine {
         }
     }
 
+    /// Width used when a layout does not specify a trail size.
+    pub const DEFAULT_SWIPE_TRAIL_WIDTH: f32 = 7.2;
+
     /// Draw a time-faded, tapered marker trail with a smooth Catmull-Rom path.
     pub fn draw_swipe_trail(
         pixels: &mut [u8],
@@ -687,6 +690,7 @@ impl RenderEngine {
         points: &[(f32, f32, std::time::Instant)],
         now: std::time::Instant,
         color: Color,
+        trail_width: f32,
         alpha_mask: &mut Vec<u8>,
     ) {
         if points.len() < 2 || width == 0 || height == 0 {
@@ -694,10 +698,17 @@ impl RenderEngine {
         }
 
         const TRAIL_LIFETIME: f32 = 0.42;
-        const CORE_RADIUS: f32 = 3.6;
-        const TIP_RADIUS: f32 = 0.42;
         const TAPER_FRACTION: f32 = 0.36;
         const AA_MARGIN: f32 = 1.5;
+
+        let trail_width = if trail_width.is_finite() {
+            trail_width.clamp(1.0, 48.0)
+        } else {
+            Self::DEFAULT_SWIPE_TRAIL_WIDTH
+        };
+        let width_scale = trail_width / Self::DEFAULT_SWIPE_TRAIL_WIDTH;
+        let core_radius = 3.6 * width_scale;
+        let tip_radius = 0.42 * width_scale;
 
         // Sample more tightly than the input events so the curve remains smooth
         // when a pointer moves quickly between frames.
@@ -738,7 +749,7 @@ impl RenderEngine {
             return;
         }
 
-        let extent = CORE_RADIUS + AA_MARGIN;
+        let extent = core_radius + AA_MARGIN;
         let min_x = (samples.iter().map(|p| p.0).fold(f32::INFINITY, f32::min) - extent)
             .floor()
             .max(0.0) as u32;
@@ -787,7 +798,7 @@ impl RenderEngine {
             let taper = |position: f32| {
                 let t = (position / TAPER_FRACTION).clamp(0.0, 1.0);
                 let eased = t * t * (3.0 - 2.0 * t);
-                TIP_RADIUS + (CORE_RADIUS - TIP_RADIUS) * eased
+                tip_radius + (core_radius - tip_radius) * eased
             };
             let start_radius = taper(start_norm);
             let end_radius = taper(end_norm);
@@ -1126,6 +1137,7 @@ mod swipe_trail_tests {
             &points,
             now,
             Color::rgba(240, 40, 20, 128),
+            RenderEngine::DEFAULT_SWIPE_TRAIL_WIDTH,
             &mut mask,
         );
 

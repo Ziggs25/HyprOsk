@@ -24,6 +24,11 @@
     "text_color": "#ffffff",
     "icon_color": "#ffffff"
   },
+  "swipe": {
+    "trail": {
+      "width": 12.0
+    }
+  },
   "layers": {
     "lower": [
       [

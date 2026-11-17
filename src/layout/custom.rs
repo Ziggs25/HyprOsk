@@ -216,6 +216,9 @@ pub struct CustomLayoutFile {
     /// Optional color palette overrides
     #[serde(default)]
     pub colors: Option<LayoutColors>,
+    /// Optional per-layout swipe gesture settings
+    #[serde(default)]
+    pub swipe: Option<SwipeConfig>,
     /// Layers map: "lower", "upper", "symbols", "symbols2"
     #[serde(default)]
     pub layers: HashMap<String, Vec<MatrixRow>>,
@@ -280,6 +283,22 @@ impl LayoutColors {
             preview_border_color: r(&self.preview_border_color, "preview_border_color"),
         }
     }
+}
+
+/// Optional visual settings for swipe typing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SwipeConfig {
+    /// Optional gesture trail appearance settings.
+    #[serde(default)]
+    pub trail: Option<SwipeTrailConfig>,
+}
+
+/// Per-layout swipe trail settings.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SwipeTrailConfig {
+    /// Total trail width in pixels. Finite values are clamped to 1..=48.
+    #[serde(default)]
+    pub width: Option<f32>,
 }
 
 fn default_layout_name() -> String {
@@ -833,6 +852,7 @@ impl CustomLayoutFile {
             preview_height: self.preview_height,
             preview_font_size: self.preview_font_size,
             colors: self.colors.as_ref().map(|c| c.resolved(&self.m3_map)),
+            swipe: self.swipe.clone(),
         };
 
         // Always prepend the standard top action/suggestion bar

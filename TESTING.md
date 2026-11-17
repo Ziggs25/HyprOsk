@@ -101,7 +101,10 @@ Manual:
    movement, including while a finger rests still. Its edges should look smooth
    over translucent and blurred layouts without dark seams or black fade tails.
    It uses colors.swipe_trail_color from the active layout JSON; if omitted, use
-   the layout accent color. Check debug logs for preview decode timing; decodes
+   the layout accent color. Set `swipe.trail.width` in the layout JSON and
+   confirm the trail gets wider or narrower after switching layouts; omitted
+   widths preserve the existing 7.2px default and configured widths clamp to
+   1–48px. Check debug logs for preview decode timing; decodes
    over 100 ms trigger a warning. Preview updates are rate-limited to 10 per
    second.
 5. Hold a letter without moving for more than 300 ms and verify its secondary-key

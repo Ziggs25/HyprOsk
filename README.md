@@ -19,7 +19,17 @@ Builds with the `futo-swipe` Cargo feature use FUTO's `honorable_sturgeon` int8 
 
 The Rust binding calls the ExecuTorch C++ runtime underneath. Swipe preprocessing, CTC decoding, and dictionary integration are Rust. The encoder accepts the current key centers at runtime, so HyprOsk supplies the active layout geometry and keeps its existing suggestion bar and next-word predictions after a swipe.
 
-Custom layouts can set `colors.swipe_trail_color` to a hex color or a Matugen token such as `primary`. If omitted, the trail uses that layout's `accent_color`, then the theme accent.
+Custom layouts can set `colors.swipe_trail_color` to a hex color or a Matugen token such as `primary`. If omitted, the trail uses that layout's `accent_color`, then the theme accent. Set `swipe.trail.width` to control the trail's total width in pixels (clamped to 1–48); when omitted, the current 7.2px width is preserved. The default desktop layout uses 20px and the mobile layout uses 12px.
+
+```json
+{
+  "swipe": {
+    "trail": {
+      "width": 22.0
+    }
+  }
+}
+```
 
 The model weights are distributed under the FUTO Model Weights License 1.0. **Swipe typing powered by FUTO Swipe technology.** The license is included at [`assets/futo_swipe/LICENSE.md`](assets/futo_swipe/LICENSE.md); see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). A FUTO-enabled build exposes this attribution with `hyprosk about`.
 

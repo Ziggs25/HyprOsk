@@ -1918,6 +1918,13 @@ impl WaylandState {
                     .and_then(|c| c.swipe_trail_color.as_deref().or(c.accent_color.as_deref()))
                     .map(Color::parse_hex)
                     .unwrap_or(self.theme.accent_color);
+                let trail_width = self
+                    .layout
+                    .swipe
+                    .as_ref()
+                    .and_then(|swipe| swipe.trail.as_ref())
+                    .and_then(|trail| trail.width)
+                    .unwrap_or(RenderEngine::DEFAULT_SWIPE_TRAIL_WIDTH);
                 RenderEngine::draw_swipe_trail(
                     canvas,
                     width,
@@ -1925,6 +1932,7 @@ impl WaylandState {
                     &trail,
                     now,
                     color,
+                    trail_width,
                     &mut self.trail_alpha_mask,
                 );
                 slint_damage = Some(Vec::new());
