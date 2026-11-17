@@ -13,9 +13,9 @@ use smithay_client_toolkit::{
     compositor::CompositorState, output::OutputState, registry::RegistryState, seat::SeatState,
     shell::wlr_layer::LayerShell, shm::Shm,
 };
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
 use std::sync::mpsc;
-use std::time::Duration;
 use wayland_client::Connection;
 use wayland_client::globals::registry_queue_init;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
@@ -223,14 +223,38 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         state.update_hold_preview(&qh);
         // Handle key repeat (e.g. hold backspace to continuously delete)
         state.update_key_repeat(&qh);
+        #[cfg(feature = "futo-swipe")]
+        state.update_swipe_preview(&qh);
         state.update_swipe_trail(&qh);
 
         // Flush and wait for next event
         conn.flush()?;
         if let Some(guard) = event_queue.prepare_read() {
-            let _ = guard.read();
+            let mut poll_fd = libc::pollfd {
+                fd: conn.as_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe {
+                libc::poll(
+                    &mut poll_fd,
+                    1,
+                    if state.has_frame_activity() { 16 } else { 32 },
+                )
+            };
+            if ready < 0 {
+                return Err(std::io::Error::last_os_error()).context("polling Wayland connection");
+            }
+            if ready > 0 {
+                let failure = poll_fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL);
+                if failure != 0 {
+                    anyhow::bail!("Wayland connection poll failed (revents={failure:#x})");
+                }
+                if poll_fd.revents & libc::POLLIN != 0 {
+                    guard.read().context("reading Wayland connection")?;
+                }
+            }
         }
-        std::thread::sleep(Duration::from_millis(4));
     }
 
     tracing::info!("HyprOsk daemon shutting down gracefully.");

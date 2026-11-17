@@ -6,6 +6,8 @@ pub mod engine;
 pub mod swipe;
 #[cfg(not(feature = "futo-swipe"))]
 pub mod swipe;
+#[cfg(feature = "futo-swipe")]
+pub mod swipe_preview;
 pub mod user_dict;
 
 pub use dictionary::Dictionary;

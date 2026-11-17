@@ -43,6 +43,8 @@ use crate::render::slint::SlintScene;
 use crate::render::theme::{Color, Theme};
 use crate::suggest::SuggestEngine;
 use crate::suggest::swipe::{SwipeKeyGeom, SwipeRecognizer};
+#[cfg(feature = "futo-swipe")]
+use crate::suggest::swipe_preview::{PreviewRequest, SwipePreviewWorker};
 use crate::wayland::input_method::{InputMethodState, TextInputCapabilities, TextInputSource};
 use crate::wayland::layer_shell::create_layer_surface;
 use crate::wayland::virtual_keyboard::{KEYMAP_FORMAT, create_keymap_fd};
@@ -123,7 +125,7 @@ impl SwipeTrace {
     fn preview_due(&mut self, now: Instant) -> bool {
         if self
             .last_preview_at
-            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(50))
+            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(100))
         {
             return false;
         }
@@ -184,6 +186,9 @@ pub struct WaylandState {
     // grows, unlike allocating a fresh buffer per redraw.
     pub canvas_buffers: Vec<Buffer>,
     pub canvas_size: (u32, u32),
+    base_frame: Vec<u8>,
+    trail_only_redraw: bool,
+    trail_alpha_mask: Vec<u8>,
 
     // Input, Suggestions & Gesture State
     pub im_state: InputMethodState,
@@ -208,6 +213,14 @@ pub struct WaylandState {
     pub pointer_pending_detail: Option<(KeyAction, Option<String>, Instant)>,
     /// Lazy OpenSwipe recognizer fed from `suggest_engine.dictionary`.
     pub swipe_engine: Option<SwipeRecognizer>,
+    #[cfg(feature = "futo-swipe")]
+    swipe_preview_worker: Option<SwipePreviewWorker>,
+    #[cfg(feature = "futo-swipe")]
+    swipe_preview_dictionary_revision: u64,
+    #[cfg(feature = "futo-swipe")]
+    swipe_preview_sequence: u64,
+    #[cfg(feature = "futo-swipe")]
+    pending_swipe_preview: Option<(i32, u64)>,
     /// Per-touch gesture candidates; only one trace is kept at a time.
     pub swipe_traces: HashMap<i32, SwipeTrace>,
     /// Slint headless paint scene (lazily initialized on first redraw).
@@ -318,6 +331,10 @@ impl WaylandState {
         };
         let key_rects = RenderEngine::calculate_key_rects(&layout, 1000, height, &theme);
         let suggest_engine = SuggestEngine::new();
+        #[cfg(feature = "futo-swipe")]
+        let swipe_preview_dictionary_revision = suggest_engine.dictionary.swipe_lexicon_revision();
+        #[cfg(feature = "futo-swipe")]
+        let swipe_preview_initial_dictionary = suggest_engine.dictionary.clone();
 
         Self {
             registry_state,
@@ -355,6 +372,9 @@ impl WaylandState {
             shift_tap_double: false,
             canvas_buffers: Vec::new(),
             canvas_size: (0, 0),
+            base_frame: Vec::new(),
+            trail_only_redraw: false,
+            trail_alpha_mask: Vec::new(),
             im_state: InputMethodState::default(),
             text_input_capabilities: TextInputCapabilities::default(),
             fallback_warning_emitted: false,
@@ -373,6 +393,14 @@ impl WaylandState {
             pending_tap_details: HashMap::new(),
             pointer_pending_detail: None,
             swipe_engine: None,
+            #[cfg(feature = "futo-swipe")]
+            swipe_preview_worker: SwipePreviewWorker::new(swipe_preview_initial_dictionary),
+            #[cfg(feature = "futo-swipe")]
+            swipe_preview_dictionary_revision,
+            #[cfg(feature = "futo-swipe")]
+            swipe_preview_sequence: 0,
+            #[cfg(feature = "futo-swipe")]
+            pending_swipe_preview: None,
             swipe_traces: HashMap::new(),
             slint_scene: None,
             space_touch_start: None,
@@ -634,6 +662,8 @@ impl WaylandState {
         }
         tracing::info!("Hiding HyprOsk on-screen keyboard");
         self.swipe_traces.clear();
+        #[cfg(feature = "futo-swipe")]
+        self.invalidate_swipe_preview();
         self.swipe_preview = None;
         self.fading_swipe_trail = None;
         self.is_visible = false;
@@ -1746,6 +1776,7 @@ impl WaylandState {
             return;
         }
 
+        let redraw_started = Instant::now();
         let width = self.width.max(100);
         let height = self.height.max(100);
         let stride = width * 4;
@@ -1780,6 +1811,7 @@ impl WaylandState {
                 }
             }
             self.canvas_size = (width, height);
+            self.base_frame.clear();
         }
 
         let latched_keys = self.latched_positions();
@@ -1792,8 +1824,18 @@ impl WaylandState {
             };
 
             let mut slint_damage: Option<Vec<(i32, i32, i32, i32)>> = None;
+            let frame_len = height as usize * stride as usize;
+            let cached_base_valid = self.base_frame.len() == frame_len;
+            self.base_frame.resize(frame_len, 0);
+            let mut slint_rendered = false;
+            let mut restored_cached_base = false;
+            if self.trail_only_redraw && cached_base_valid {
+                canvas.copy_from_slice(&self.base_frame);
+                restored_cached_base = true;
+                slint_damage = Some(Vec::new());
+            }
             // Paint swap: render the Wireframe scene through Slint when available.
-            if self.slint_scene.is_none() {
+            if slint_damage.is_none() && self.slint_scene.is_none() {
                 match SlintScene::new(width, height) {
                     Ok(scene) => self.slint_scene = Some(scene),
                     Err(e) => {
@@ -1801,7 +1843,9 @@ impl WaylandState {
                     }
                 }
             }
-            if let Some(scene) = self.slint_scene.as_mut() {
+            if slint_damage.is_none()
+                && let Some(scene) = self.slint_scene.as_mut()
+            {
                 if let Some(damage) = scene.render(
                     &self.layout,
                     &self.theme,
@@ -1812,9 +1856,10 @@ impl WaylandState {
                     self.swipe_offset,
                     self.hold_preview.clone(),
                     self.clipboard_scroll_y,
-                    canvas,
+                    &mut self.base_frame,
                 ) {
                     slint_damage = Some(damage);
+                    slint_rendered = true;
                     tracing::trace!("Painted frame via Slint scene ({}x{})", width, height);
                 } else {
                     tracing::warn!("Slint frame render failed, falling back to legacy renderer");
@@ -1833,6 +1878,14 @@ impl WaylandState {
                     self.swipe_offset,
                 );
             }
+            if slint_rendered {
+                canvas.copy_from_slice(&self.base_frame);
+            }
+            if !restored_cached_base && !slint_rendered {
+                self.base_frame.clear();
+                self.base_frame.extend_from_slice(canvas);
+            }
+            self.trail_only_redraw = false;
 
             let now = Instant::now();
             let trail: Vec<(f32, f32, Instant)> = self
@@ -1844,6 +1897,14 @@ impl WaylandState {
                 .map(|points| {
                     points
                         .iter()
+                        .filter(|(_, _, at)| {
+                            now.saturating_duration_since(*at) < Duration::from_millis(420)
+                        })
+                        .rev()
+                        .take(96)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
                         .map(|(x, y, at)| (*x as f32, *y as f32, *at))
                         .collect()
                 })
@@ -1856,7 +1917,15 @@ impl WaylandState {
                     .and_then(|c| c.swipe_trail_color.as_deref().or(c.accent_color.as_deref()))
                     .map(Color::parse_hex)
                     .unwrap_or(self.theme.accent_color);
-                RenderEngine::draw_swipe_trail(canvas, width, height, &trail, now, color);
+                RenderEngine::draw_swipe_trail(
+                    canvas,
+                    width,
+                    height,
+                    &trail,
+                    now,
+                    color,
+                    &mut self.trail_alpha_mask,
+                );
                 slint_damage = Some(Vec::new());
             }
 
@@ -1877,6 +1946,13 @@ impl WaylandState {
                 surface.commit();
             }
             break;
+        }
+        let elapsed = redraw_started.elapsed();
+        if elapsed >= Duration::from_millis(8) {
+            tracing::debug!(
+                elapsed_ms = elapsed.as_secs_f64() * 1000.0,
+                "slow keyboard redraw"
+            );
         }
     }
 
@@ -2361,6 +2437,91 @@ impl WaylandState {
         }
     }
 
+    #[cfg(feature = "futo-swipe")]
+    fn invalidate_swipe_preview(&mut self) {
+        self.pending_swipe_preview = None;
+        self.swipe_preview_sequence = self.swipe_preview_sequence.wrapping_add(1);
+    }
+
+    #[cfg(feature = "futo-swipe")]
+    fn queue_swipe_preview(&mut self, touch_id: i32, trace: &SwipeTrace) {
+        let Some(worker) = self.swipe_preview_worker.as_ref() else {
+            return;
+        };
+        let Some((keys, aspect, points)) = self.swipe_decode_input(trace) else {
+            self.swipe_preview = None;
+            return;
+        };
+        self.swipe_preview_sequence = self.swipe_preview_sequence.wrapping_add(1);
+        let sequence = self.swipe_preview_sequence;
+        let revision = self.suggest_engine.dictionary.swipe_lexicon_revision();
+        let dictionary_update = if revision != self.swipe_preview_dictionary_revision {
+            self.swipe_preview_dictionary_revision = revision;
+            Some(self.suggest_engine.dictionary.clone())
+        } else {
+            None
+        };
+        self.pending_swipe_preview = Some((touch_id, sequence));
+        worker.submit(PreviewRequest {
+            touch_id,
+            sequence,
+            keys,
+            aspect,
+            points,
+            dictionary_revision: revision,
+            dictionary_update,
+        });
+    }
+
+    #[cfg(feature = "futo-swipe")]
+    pub fn update_swipe_preview(&mut self, qh: &QueueHandle<Self>) {
+        let Some(worker) = self.swipe_preview_worker.as_ref() else {
+            return;
+        };
+        let Some(result) = worker.take_result() else {
+            return;
+        };
+        if self.pending_swipe_preview != Some((result.touch_id, result.sequence)) {
+            return;
+        }
+        self.pending_swipe_preview = None;
+        if result.dictionary_revision != self.suggest_engine.dictionary.swipe_lexicon_revision()
+            || !self
+                .swipe_traces
+                .get(&result.touch_id)
+                .is_some_and(SwipeTrace::qualifies)
+        {
+            return;
+        }
+        tracing::debug!(
+            elapsed_ms = result.elapsed_ms,
+            "background swipe preview decode completed"
+        );
+        if result.elapsed_ms >= 100.0 {
+            tracing::warn!(
+                elapsed_ms = result.elapsed_ms,
+                "background swipe preview decode exceeded 100 ms"
+            );
+        }
+        let best = result
+            .candidates
+            .first()
+            .map(|word| self.swipe_case_word(word));
+        if let Some(active) = self.swipe_traces.get_mut(&result.touch_id) {
+            active.candidates = best.iter().cloned().collect();
+        }
+        self.swipe_preview = best;
+        self.sync_layout_and_redraw(qh);
+    }
+
+    pub fn has_frame_activity(&self) -> bool {
+        !self.active_touches.is_empty()
+            || !self.swipe_traces.is_empty()
+            || self.fading_swipe_trail.is_some()
+            || self.repeat_key.is_some()
+            || self.hold_preview.is_some()
+    }
+
     pub fn update_swipe_trail(&mut self, qh: &QueueHandle<Self>) {
         const TRAIL_LIFETIME: Duration = Duration::from_millis(420);
         const FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -2384,6 +2545,7 @@ impl WaylandState {
                 // fully faded; otherwise the surface would keep its final
                 // nearly transparent frame until another input event.
                 if self.last_trail_frame_at.take().is_some() {
+                    self.trail_only_redraw = true;
                     self.redraw(qh);
                 }
                 return;
@@ -2393,6 +2555,7 @@ impl WaylandState {
                 .is_none_or(|last| now.saturating_duration_since(last) >= FRAME_INTERVAL);
             if frame_due {
                 self.last_trail_frame_at = Some(now);
+                self.trail_only_redraw = true;
                 self.redraw(qh);
             }
             return;
@@ -2405,6 +2568,7 @@ impl WaylandState {
         if points.is_empty() {
             self.fading_swipe_trail = None;
             self.last_trail_frame_at = None;
+            self.trail_only_redraw = true;
             self.redraw(qh);
             return;
         }
@@ -2415,6 +2579,7 @@ impl WaylandState {
             return;
         }
         self.last_trail_frame_at = Some(now);
+        self.trail_only_redraw = true;
         self.redraw(qh);
     }
 
@@ -2481,6 +2646,8 @@ impl WaylandState {
     }
 
     fn begin_swipe_trace(&mut self, touch_id: i32, r_idx: usize, k_idx: usize, x: f64, y: f64) {
+        #[cfg(feature = "futo-swipe")]
+        self.invalidate_swipe_preview();
         if self.clipboard_mode || !self.swipe_traces.is_empty() {
             return;
         }
@@ -2555,6 +2722,27 @@ impl WaylandState {
         Some((geometry, height / width, min_x, min_y, width, height))
     }
 
+    #[cfg(feature = "futo-swipe")]
+    fn swipe_decode_input(
+        &self,
+        trace: &SwipeTrace,
+    ) -> Option<(Vec<SwipeKeyGeom>, f32, Vec<(f32, f32, f64)>)> {
+        let (keys, aspect, x0, y0, width, height) = self.swipe_layout()?;
+        let first_time = trace.points.first().map_or(trace.start, |point| point.2);
+        let points = trace
+            .points
+            .iter()
+            .map(|(x, y, at)| {
+                (
+                    ((*x as f32) - x0) / width,
+                    ((*y as f32) - y0) / height,
+                    at.duration_since(first_time).as_secs_f64() * 1000.0,
+                )
+            })
+            .collect();
+        Some((keys, aspect, points))
+    }
+
     fn recognize_swipe(&mut self, trace: &SwipeTrace) -> Vec<String> {
         let Some((keys, aspect, x0, y0, width, height)) = self.swipe_layout() else {
             return Vec::new();
@@ -2620,6 +2808,8 @@ impl WaylandState {
     }
 
     fn finish_swipe(&mut self, trace: &SwipeTrace, qh: &QueueHandle<Self>) -> bool {
+        #[cfg(feature = "futo-swipe")]
+        self.invalidate_swipe_preview();
         self.swipe_preview = None;
         let candidates = self.recognize_swipe(trace);
         let Some(best) = candidates.first() else {
@@ -3226,6 +3416,8 @@ impl TouchHandler for WaylandState {
         );
         // A second finger turns the gesture into a tap/chord, not a swipe.
         self.swipe_traces.clear();
+        #[cfg(feature = "futo-swipe")]
+        self.invalidate_swipe_preview();
         if self.clipboard_mode {
             self.clipboard_drag_start = Some((x, y, self.clipboard_scroll_y));
             self.clipboard_dragging = false;
@@ -3446,6 +3638,11 @@ impl TouchHandler for WaylandState {
             .swipe_traces
             .get(&_id)
             .is_some_and(SwipeTrace::qualifies);
+        #[cfg(feature = "futo-swipe")]
+        let needs_swipe_suppression_redraw = swipe_qualifies
+            && (self.pressed_key.is_some()
+                || self.hold_preview.is_some()
+                || self.pending_taps.contains_key(&_id));
         if swipe_qualifies {
             if let Some((r, k)) = self.pending_taps.remove(&_id) {
                 self.pressed_keys.retain(|&pressed| pressed != (r, k));
@@ -3467,21 +3664,30 @@ impl TouchHandler for WaylandState {
             }
             self.pressed_key = self.pressed_keys.last().copied();
             self.press_instant = None;
-            self.hold_preview = None;
-            let words = self.recognize_swipe(&trace);
-            if let Some(best) = words.first() {
-                let best = self.swipe_case_word(best);
-                if let Some(active) = self.swipe_traces.get_mut(&_id) {
-                    active.candidates = vec![best.clone()];
+            #[cfg(feature = "futo-swipe")]
+            {
+                self.queue_swipe_preview(_id, &trace);
+                if needs_swipe_suppression_redraw {
+                    self.sync_layout_and_redraw(qh);
                 }
-                self.swipe_preview = Some(best);
-            } else {
-                if let Some(active) = self.swipe_traces.get_mut(&_id) {
-                    active.candidates.clear();
-                }
-                self.swipe_preview = None;
             }
-            self.sync_layout_and_redraw(qh);
+            #[cfg(not(feature = "futo-swipe"))]
+            {
+                let words = self.recognize_swipe(&trace);
+                if let Some(best) = words.first() {
+                    let best = self.swipe_case_word(best);
+                    if let Some(active) = self.swipe_traces.get_mut(&_id) {
+                        active.candidates = vec![best.clone()];
+                    }
+                    self.swipe_preview = Some(best);
+                } else {
+                    if let Some(active) = self.swipe_traces.get_mut(&_id) {
+                        active.candidates.clear();
+                    }
+                    self.swipe_preview = None;
+                }
+                self.sync_layout_and_redraw(qh);
+            }
         }
         self.handle_motion(x, y, qh);
     }
@@ -3497,6 +3703,8 @@ impl TouchHandler for WaylandState {
         self.swipe_preview = None;
         self.fading_swipe_trail = None;
         self.swipe_traces.clear();
+        #[cfg(feature = "futo-swipe")]
+        self.invalidate_swipe_preview();
         self.pointer_pending_detail = None;
         self.press_instant = None;
         self.hold_preview = None;

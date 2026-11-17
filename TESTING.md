@@ -82,9 +82,14 @@ Manual:
    the same user dictionary used by typed suggestions. Lift to commit the best
    candidate and trailing space; next-word predictions should follow where
    dictionary bigrams exist.
-4. Verify the swipe trail is smooth under finger movement, fades after release,
-   and uses `colors.swipe_trail_color` from the active layout JSON. When omitted,
-   it should use the layout accent color.
+4. Verify the swipe trail is a solid, smooth marker stroke with a rounded fine
+   tip at the oldest end, and fades completely about 420 ms after the last
+   movement, including while a finger rests still. Its edges should look smooth
+   over translucent and blurred layouts without dark seams or black fade tails.
+   It uses colors.swipe_trail_color from the active layout JSON; if omitted, use
+   the layout accent color. Check debug logs for preview decode timing; decodes
+   over 100 ms trigger a warning. Preview updates are rate-limited to 10 per
+   second.
 5. Hold a letter without moving for more than 300 ms and verify its secondary-key
    popup and long-press output still work. After crossing the swipe threshold,
    the pressed-key highlight and popup should clear and no secondary character

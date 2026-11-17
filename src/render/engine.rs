@@ -670,7 +670,7 @@ impl RenderEngine {
         }
     }
 
-    /// Draw a time-faded, smoothed touchscreen swipe trail.
+    /// Draw a time-faded, tapered marker trail with a smooth Catmull-Rom path.
     pub fn draw_swipe_trail(
         pixels: &mut [u8],
         width: u32,
@@ -678,29 +678,32 @@ impl RenderEngine {
         points: &[(f32, f32, std::time::Instant)],
         now: std::time::Instant,
         color: Color,
+        alpha_mask: &mut Vec<u8>,
     ) {
         if points.len() < 2 || width == 0 || height == 0 {
             return;
         }
 
         const TRAIL_LIFETIME: f32 = 0.42;
-        const CORE_RADIUS: f32 = 2.0;
-        const HALO_RADIUS: f32 = 4.5;
-        const RASTER_MARGIN: f32 = HALO_RADIUS + 0.5;
+        const CORE_RADIUS: f32 = 3.6;
+        const TIP_RADIUS: f32 = 0.42;
+        const TAPER_FRACTION: f32 = 0.36;
+        const AA_MARGIN: f32 = 1.5;
 
-        // Keep the Catmull-Rom curve for a smooth line, but rasterize a much
-        // narrower stroke than the old 6px halo. The software SHM renderer
-        // paints this over a freshly rendered keyboard every frame.
+        // Sample more tightly than the input events so the curve remains smooth
+        // when a pointer moves quickly between frames.
+        let mut samples = Vec::with_capacity(points.len() * 4);
+        let mut path_length = 0.0f32;
+        samples.push((points[0].0, points[0].1, points[0].2, path_length));
         for i in 0..points.len() - 1 {
             let p0 = points[i.saturating_sub(1)];
             let p1 = points[i];
             let p2 = points[i + 1];
             let p3 = points[(i + 2).min(points.len() - 1)];
             let distance = (p2.0 - p1.0).hypot(p2.1 - p1.1);
-            let steps = (distance / 4.0).ceil().clamp(1.0, 128.0) as usize;
+            let steps = (distance / 3.5).ceil().clamp(1.0, 128.0) as usize;
             let span = p2.2.saturating_duration_since(p1.2);
-            let mut previous = p1;
-
+            let mut previous = (p1.0, p1.1, p1.2);
             for step in 1..=steps {
                 let t = step as f32 / steps as f32;
                 let t2 = t * t;
@@ -717,58 +720,45 @@ impl RenderEngine {
                     catmull(p0.1, p1.1, p2.1, p3.1),
                     at,
                 );
-                Self::draw_swipe_segment(
-                    pixels,
-                    width,
-                    height,
-                    previous,
-                    current,
-                    now,
-                    color,
-                    TRAIL_LIFETIME,
-                    CORE_RADIUS,
-                    HALO_RADIUS,
-                    RASTER_MARGIN,
-                );
+                path_length += (current.0 - previous.0).hypot(current.1 - previous.1);
+                samples.push((current.0, current.1, current.2, path_length));
                 previous = current;
             }
         }
-    }
+        if path_length <= f32::EPSILON {
+            return;
+        }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_swipe_segment(
-        pixels: &mut [u8],
-        width: u32,
-        height: u32,
-        from: (f32, f32, std::time::Instant),
-        to: (f32, f32, std::time::Instant),
-        now: std::time::Instant,
-        color: Color,
-        lifetime: f32,
-        core_radius: f32,
-        halo_radius: f32,
-        raster_margin: f32,
-    ) {
-        let dx = to.0 - from.0;
-        let dy = to.1 - from.1;
-        let length_squared = dx * dx + dy * dy;
-        let min_x = (from.0.min(to.0) - raster_margin).floor().max(0.0) as i32;
-        let max_x = (from.0.max(to.0) + raster_margin)
+        let extent = CORE_RADIUS + AA_MARGIN;
+        let min_x = (samples.iter().map(|p| p.0).fold(f32::INFINITY, f32::min) - extent)
+            .floor()
+            .max(0.0) as u32;
+        let max_x = (samples
+            .iter()
+            .map(|p| p.0)
+            .fold(f32::NEG_INFINITY, f32::max)
+            + extent)
             .ceil()
-            .min(width as f32 - 1.0) as i32;
-        let min_y = (from.1.min(to.1) - raster_margin).floor().max(0.0) as i32;
-        let max_y = (from.1.max(to.1) + raster_margin)
+            .min(width as f32 - 1.0) as u32;
+        let min_y = (samples.iter().map(|p| p.1).fold(f32::INFINITY, f32::min) - extent)
+            .floor()
+            .max(0.0) as u32;
+        let max_y = (samples
+            .iter()
+            .map(|p| p.1)
+            .fold(f32::NEG_INFINITY, f32::max)
+            + extent)
             .ceil()
-            .min(height as f32 - 1.0) as i32;
+            .min(height as f32 - 1.0) as u32;
         if min_x > max_x || min_y > max_y {
             return;
         }
 
-        // Timestamps and source color are invariant across this tiny capsule.
-        // Precompute the time span here instead of doing Instant/Duration
-        // operations and constructing Color values for every covered pixel.
-        let start_age = now.saturating_duration_since(from.2).as_secs_f32();
-        let sample_span = to.2.saturating_duration_since(from.2).as_secs_f32();
+        let mask_width = (max_x - min_x + 1) as usize;
+        let mask_height = (max_y - min_y + 1) as usize;
+        let mask_len = mask_width.saturating_mul(mask_height);
+        alpha_mask.resize(mask_len, 0);
+        alpha_mask[..mask_len].fill(0);
         let source_alpha = color.a as f32 / 255.0;
 
         #[inline]
@@ -777,34 +767,97 @@ impl RenderEngine {
             edge * edge * (3.0 - 2.0 * edge)
         }
 
+        for pair in samples.windows(2) {
+            let from = pair[0];
+            let to = pair[1];
+            let dx = to.0 - from.0;
+            let dy = to.1 - from.1;
+            let length_squared = dx * dx + dy * dy;
+            let start_norm = from.3 / path_length;
+            let end_norm = to.3 / path_length;
+            let taper = |position: f32| {
+                let t = (position / TAPER_FRACTION).clamp(0.0, 1.0);
+                let eased = t * t * (3.0 - 2.0 * t);
+                TIP_RADIUS + (CORE_RADIUS - TIP_RADIUS) * eased
+            };
+            let start_radius = taper(start_norm);
+            let end_radius = taper(end_norm);
+            let margin = start_radius.max(end_radius) + AA_MARGIN;
+            let seg_min_x = (from.0.min(to.0) - margin).floor().max(min_x as f32) as u32;
+            let seg_max_x = (from.0.max(to.0) + margin).ceil().min(max_x as f32) as u32;
+            let seg_min_y = (from.1.min(to.1) - margin).floor().max(min_y as f32) as u32;
+            let seg_max_y = (from.1.max(to.1) + margin).ceil().min(max_y as f32) as u32;
+            if seg_min_x > seg_max_x || seg_min_y > seg_max_y {
+                continue;
+            }
+            let start_age = now.saturating_duration_since(from.2).as_secs_f32();
+            let sample_span = to.2.saturating_duration_since(from.2).as_secs_f32();
+
+            for y in seg_min_y..=seg_max_y {
+                for x in seg_min_x..=seg_max_x {
+                    let px = x as f32 + 0.5;
+                    let py = y as f32 + 0.5;
+                    let projection = if length_squared > f32::EPSILON {
+                        (((px - from.0) * dx + (py - from.1) * dy) / length_squared).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let nearest_x = from.0 + dx * projection;
+                    let nearest_y = from.1 + dy * projection;
+                    let distance = (px - nearest_x).hypot(py - nearest_y);
+                    let radius = start_radius + (end_radius - start_radius) * projection;
+                    if distance > radius + AA_MARGIN {
+                        continue;
+                    }
+
+                    let coverage = if distance < radius - 0.5 {
+                        1.0
+                    } else {
+                        // Four subpixel samples smooth only the capsule boundary.
+                        let mut sum = 0.0;
+                        for oy in [0.25f32, 0.75] {
+                            for ox in [0.25f32, 0.75] {
+                                let sx = x as f32 + ox;
+                                let sy = y as f32 + oy;
+                                let sample_t = if length_squared > f32::EPSILON {
+                                    (((sx - from.0) * dx + (sy - from.1) * dy) / length_squared)
+                                        .clamp(0.0, 1.0)
+                                } else {
+                                    0.0
+                                };
+                                let qx = from.0 + dx * sample_t;
+                                let qy = from.1 + dy * sample_t;
+                                let sample_radius =
+                                    start_radius + (end_radius - start_radius) * sample_t;
+                                sum += smooth_coverage(sample_radius, (sx - qx).hypot(sy - qy));
+                            }
+                        }
+                        sum * 0.25
+                    };
+                    let age = (start_age - sample_span * projection).max(0.0);
+                    if age >= TRAIL_LIFETIME {
+                        continue;
+                    }
+                    let remaining = 1.0 - age / TRAIL_LIFETIME;
+                    let fade = remaining * remaining * (3.0 - 2.0 * remaining);
+                    let alpha = (255.0 * coverage * fade * source_alpha)
+                        .round()
+                        .clamp(0.0, 255.0) as u8;
+                    let mask_index = (y - min_y) as usize * mask_width + (x - min_x) as usize;
+                    alpha_mask[mask_index] = alpha_mask[mask_index].max(alpha);
+                }
+            }
+        }
+
+        // Composite once per pixel. The mask's max operation prevents overlapping
+        // curve capsules from producing dark seams.
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                let px = x as f32 + 0.5;
-                let py = y as f32 + 0.5;
-                let projection = if length_squared > f32::EPSILON {
-                    (((px - from.0) * dx + (py - from.1) * dy) / length_squared).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let nearest_x = from.0 + dx * projection;
-                let nearest_y = from.1 + dy * projection;
-                let pixel_dx = px - nearest_x;
-                let pixel_dy = py - nearest_y;
-                let distance = (pixel_dx * pixel_dx + pixel_dy * pixel_dy).sqrt();
-
-                let age = (start_age - sample_span * projection).max(0.0);
-                if age >= lifetime {
-                    continue;
-                }
-                let remaining = 1.0 - age / lifetime;
-                let fade = remaining * remaining * (3.0 - 2.0 * remaining);
-                let core = 218.0 * smooth_coverage(core_radius, distance);
-                let halo = 58.0 * smooth_coverage(halo_radius, distance);
-                let alpha = (core.max(halo) * fade * source_alpha) as u32;
+                let mask_index = (y - min_y) as usize * mask_width + (x - min_x) as usize;
+                let alpha = alpha_mask[mask_index] as u32;
                 if alpha == 0 {
                     continue;
                 }
-
                 let offset = ((y as usize * width as usize) + x as usize) * 4;
                 let Some(pixel) = pixels.get_mut(offset..offset + 4) else {
                     continue;
@@ -819,7 +872,9 @@ impl RenderEngine {
                         .min(255);
                 let blue = ((color.b as u32 * alpha + (packed & 255) * inverse_alpha + 127) / 255)
                     .min(255);
-                let blended = (255 << 24) | (red << 16) | (green << 8) | blue;
+                let dst_alpha = (packed >> 24) & 255;
+                let out_alpha = (alpha + (dst_alpha * inverse_alpha + 127) / 255).min(255);
+                let blended = (out_alpha << 24) | (red << 16) | (green << 8) | blue;
                 pixel.copy_from_slice(&blended.to_ne_bytes());
             }
         }
@@ -1035,5 +1090,41 @@ fn get_glyph_bitmap(ch: char) -> [u8; 8] {
         ')' => [0x20, 0x10, 0x08, 0x08, 0x08, 0x10, 0x20, 0x00],
         '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00],
         _ => [0x7E, 0x42, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00],
+    }
+}
+
+#[cfg(test)]
+mod swipe_trail_tests {
+    use super::{Color, RenderEngine};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn faded_trail_composites_over_translucent_premultiplied_pixels() {
+        let now = Instant::now();
+        let old = now - Duration::from_millis(210);
+        let mut pixels = vec![0u8; 30 * 20 * 4];
+        let destination = (128u32 << 24) | (40u32 << 16) | (50u32 << 8) | 60u32;
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&destination.to_ne_bytes());
+        }
+        let points = [(7.0, 10.0, old), (22.0, 10.0, old)];
+        let mut mask = Vec::new();
+
+        RenderEngine::draw_swipe_trail(
+            &mut pixels,
+            30,
+            20,
+            &points,
+            now,
+            Color::rgba(240, 40, 20, 128),
+            &mut mask,
+        );
+
+        let offset = (10 * 30 + 14) * 4;
+        let blended = u32::from_ne_bytes(pixels[offset..offset + 4].try_into().unwrap());
+        assert_eq!((blended >> 24) & 255, 160);
+        assert_eq!((blended >> 16) & 255, 90);
+        assert_eq!((blended >> 8) & 255, 47);
+        assert_eq!(blended & 255, 50);
     }
 }
