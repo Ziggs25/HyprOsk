@@ -24,6 +24,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 nix = { version = "0.29", features = ["signal", "socket", "user", "mman", "fs"] }
 libc = "0.2"
+zbus = "=5.19.0"
 executorch = { version = "0.13.0", default-features = false, features = ["module", "tensor-ptr", "ndarray"], optional = true }
 ndarray = { version = "0.17", optional = true }
 # Slint = paint bucket only: headless software renderer, no windowing.

@@ -1,3 +1,4 @@
+pub mod atspi;
 pub mod config;
 pub mod folio;
 pub mod hyprland;
@@ -120,6 +121,12 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
     let (hypr_tx, hypr_rx) = mpsc::channel();
     let (folio_tx, folio_rx) = mpsc::channel();
     let (touch_tx, touch_rx) = mpsc::channel();
+    let (atspi_tx, atspi_rx) = mpsc::sync_channel(1);
+
+    if config.behavior.surrounding_text_readback {
+        crate::atspi::spawn_worker(atspi_tx, state.im_state.is_active.clone());
+        tracing::info!("AT-SPI text fallback enabled for focused editable fields");
+    }
 
     HyprlandIpcListener::start_listener(hypr_tx);
 
@@ -215,6 +222,10 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
         while let Ok(attached) = folio_rx.try_recv() {
             state.on_folio_change(attached, &qh);
         }
+        while let Ok(snapshot) = atspi_rx.try_recv() {
+            state.sync_suggest_with_atspi(snapshot, &qh);
+        }
+
         while let Ok(event) = touch_rx.try_recv() {
             state.note_touch(event);
         }

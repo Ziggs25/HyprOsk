@@ -1,4 +1,13 @@
 use crate::suggest::dictionary::Dictionary;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone)]
+struct PendingSelectionEcho {
+    selected_word: String,
+    previous_history: Vec<String>,
+    previous_current_word: String,
+    started_at: Instant,
+}
 
 #[derive(Debug, Clone)]
 pub struct SuggestEngine {
@@ -7,6 +16,7 @@ pub struct SuggestEngine {
     pub word_history: Vec<String>,
     pub candidates: Vec<String>,
     pub is_next_word_mode: bool,
+    pending_selection_echo: Option<PendingSelectionEcho>,
 }
 
 impl Default for SuggestEngine {
@@ -23,6 +33,7 @@ impl SuggestEngine {
             word_history: Vec::new(),
             candidates: Vec::new(),
             is_next_word_mode: false,
+            pending_selection_echo: None,
         }
     }
 
@@ -34,6 +45,7 @@ impl SuggestEngine {
             word_history: Vec::new(),
             candidates: Vec::new(),
             is_next_word_mode: false,
+            pending_selection_echo: None,
         }
     }
 
@@ -100,26 +112,38 @@ impl SuggestEngine {
     }
 
     pub fn sync_with_text(&mut self, surrounding: &str, cursor_bytes: usize) {
+        self.sync_with_text_inner(surrounding, cursor_bytes, false);
+    }
+
+    pub fn sync_with_external_text(&mut self, surrounding: &str, cursor_bytes: usize) {
+        self.sync_with_text_inner(surrounding, cursor_bytes, true);
+    }
+
+    fn sync_with_text_inner(&mut self, surrounding: &str, cursor_bytes: usize, external: bool) {
         let valid_len = surrounding.floor_char_boundary(surrounding.len().min(cursor_bytes));
         let before = &surrounding[..valid_len];
-        if before.is_empty() {
-            // Lagging echo from before the word started (e.g. empty/cleared
-            // event arriving after typing began): preserve the active word.
-            if !self.current_word.is_empty() {
-                return;
-            }
-            self.clear();
-            return;
-        }
-
         let words: Vec<String> = before
             .split(|c: char| !c.is_alphabetic() && c != '\'')
             .filter(|w| !w.is_empty())
             .map(|w| w.to_string())
             .collect();
 
+        if self.should_ignore_pending_selection_echo(surrounding, valid_len, before, &words) {
+            return;
+        }
+
+        if before.is_empty() {
+            // Lagging echo from before the word started (e.g. empty/cleared
+            // event arriving after typing began): preserve the active word.
+            if !external && !self.current_word.is_empty() {
+                return;
+            }
+            self.clear();
+            return;
+        }
+
         if before.ends_with(' ') {
-            if !self.current_word.is_empty() {
+            if !external && !self.current_word.is_empty() {
                 return;
             }
             self.word_history = words;
@@ -143,7 +167,8 @@ impl SuggestEngine {
             // Stale post-commit echo: if next-word prediction is active and the
             // surrounding snapshot reports an unspaced prefix of the word just
             // committed, ignore it so the optimistic selection state is not reverted.
-            if self.is_next_word_mode
+            if !external
+                && self.is_next_word_mode
                 && self
                     .word_history
                     .last()
@@ -155,7 +180,8 @@ impl SuggestEngine {
             // (e.g. 'b' arriving after 'r' was typed for 'br'). If the
             // surrounding word is a strict prefix of the actively typed word,
             // it is stale — return without clobbering current_word.
-            if !self.current_word.is_empty()
+            if !external
+                && !self.current_word.is_empty()
                 && last_word.len() < self.current_word.len()
                 && self.current_word.starts_with(&last_word)
             {
@@ -168,6 +194,35 @@ impl SuggestEngine {
         } else {
             self.clear();
         }
+    }
+
+    fn should_ignore_pending_selection_echo(
+        &mut self,
+        surrounding: &str,
+        cursor_bytes: usize,
+        before: &str,
+        words: &[String],
+    ) -> bool {
+        let Some(pending) = self.pending_selection_echo.clone() else {
+            return false;
+        };
+
+        if pending.started_at.elapsed() > Duration::from_millis(1800) {
+            self.pending_selection_echo = None;
+            return false;
+        }
+
+        if selected_text_covers_cursor(surrounding, cursor_bytes, &pending.selected_word) {
+            self.pending_selection_echo = None;
+            return false;
+        }
+
+        if matches_preselection_context(&pending, before, words) {
+            return true;
+        }
+
+        self.pending_selection_echo = None;
+        false
     }
 
     pub fn on_space(&mut self) {
@@ -191,9 +246,21 @@ impl SuggestEngine {
 
     pub fn on_word_selected(&mut self, chosen_word: &str) {
         let chosen_clean = chosen_word.trim().to_string();
+        self.pending_selection_echo = if chosen_clean.is_empty() {
+            None
+        } else {
+            Some(PendingSelectionEcho {
+                selected_word: chosen_clean.clone(),
+                previous_history: self.word_history.clone(),
+                previous_current_word: self.current_word.clone(),
+                started_at: Instant::now(),
+            })
+        };
         // Explicitly chosen word is immediately marked permanent (immune to pruning)
         self.dictionary.record_user_word(&chosen_clean, true);
-        if let Some(prev) = self.word_history.last() {
+        if let Some(prev) = self.word_history.last()
+            && !prev.eq_ignore_ascii_case(&chosen_clean)
+        {
             self.dictionary.record_user_bigram(prev, &chosen_clean);
         }
         self.word_history.push(chosen_clean.clone());
@@ -221,7 +288,7 @@ impl SuggestEngine {
             let p2 = if predictions.len() >= 3 {
                 predictions[2].0.clone()
             } else {
-                p1.clone()
+                String::new()
             };
             self.candidates = vec![p1, p0, p2];
         } else {
@@ -234,6 +301,7 @@ impl SuggestEngine {
         self.word_history.clear();
         self.candidates.clear();
         self.is_next_word_mode = false;
+        self.pending_selection_echo = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -303,12 +371,6 @@ impl SuggestEngine {
                     }
                 }
             }
-            if left.is_empty() {
-                left = self.current_word.clone();
-            }
-            if right.is_empty() {
-                right = left.clone();
-            }
             slots.push(left); // Slot 0 (Left)
             slots.push(top_candidate); // Slot 1 (Center)
             slots.push(right); // Slot 2 (Right)
@@ -327,9 +389,6 @@ impl SuggestEngine {
                     break;
                 }
             }
-            if right.is_empty() {
-                right = center.clone();
-            }
             slots.push(left); // Slot 0 (Left)
             slots.push(center); // Slot 1 (Center)
             slots.push(right); // Slot 2 (Right)
@@ -337,6 +396,93 @@ impl SuggestEngine {
 
         self.candidates = slots;
     }
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphabetic() || ch == '\''
+}
+
+fn matches_preselection_context(
+    pending: &PendingSelectionEcho,
+    before: &str,
+    words: &[String],
+) -> bool {
+    let history_len = pending.previous_history.len();
+    if words.len() < history_len
+        || !words
+            .iter()
+            .take(history_len)
+            .zip(&pending.previous_history)
+            .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
+    {
+        return false;
+    }
+
+    if pending.previous_current_word.is_empty() {
+        return words.len() == history_len;
+    }
+
+    if words.len() == history_len {
+        return before.is_empty() || before.chars().last().is_some_and(char::is_whitespace);
+    }
+
+    if words.len() != history_len + 1 {
+        return false;
+    }
+
+    let lagging_word = words.last().expect("length checked");
+    let previous_lower = pending.previous_current_word.to_lowercase();
+    let lagging_lower = lagging_word.to_lowercase();
+    previous_lower.starts_with(&lagging_lower)
+}
+
+fn selected_text_covers_cursor(surrounding: &str, cursor_bytes: usize, selected: &str) -> bool {
+    let selected_words: Vec<String> = selected
+        .split(|c: char| !is_word_char(c))
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    if selected_words.is_empty() {
+        return false;
+    }
+
+    let cursor = surrounding.floor_char_boundary(surrounding.len().min(cursor_bytes));
+    let mut spans: Vec<(usize, usize, &str)> = Vec::new();
+    let mut start = None;
+
+    for (idx, ch) in surrounding.char_indices() {
+        if is_word_char(ch) {
+            start.get_or_insert(idx);
+        } else if let Some(word_start) = start.take() {
+            spans.push((word_start, idx, &surrounding[word_start..idx]));
+        }
+    }
+    if let Some(word_start) = start {
+        spans.push((word_start, surrounding.len(), &surrounding[word_start..]));
+    }
+
+    for window in spans.windows(selected_words.len()) {
+        if !window
+            .iter()
+            .zip(&selected_words)
+            .all(|((_, _, actual), expected)| actual.eq_ignore_ascii_case(expected))
+        {
+            continue;
+        }
+
+        let span_start = window[0].0;
+        let span_end = window[window.len() - 1].1;
+        if (cursor >= span_start && cursor <= span_end)
+            || (cursor > span_end
+                && surrounding[span_end..cursor]
+                    .chars()
+                    .all(|ch| !is_word_char(ch)))
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -618,5 +764,62 @@ mod tests {
         // Unrelated word (cursor move / external edit) still syncs.
         engine.sync_with_text("xyz", 3);
         assert_eq!(engine.current_word, "xyz");
+    }
+
+    #[test]
+    fn delayed_external_prefix_echo_after_selection_is_ignored() {
+        let mut engine = SuggestEngine::new_empty();
+        engine.sync_with_external_text("br", 2);
+        assert_eq!(engine.current_word, "br");
+
+        engine.on_word_selected("bruh");
+        let selected_candidates = engine.candidates.clone();
+        assert!(engine.is_next_word_mode);
+
+        engine.sync_with_external_text("br", 2);
+        assert!(engine.is_next_word_mode);
+        assert!(engine.current_word.is_empty());
+        assert_eq!(engine.word_history.last().map(String::as_str), Some("bruh"));
+        assert_eq!(engine.candidates, selected_candidates);
+        assert!(!engine
+            .candidates
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case("bruh")));
+
+        engine.sync_with_external_text("bruh ", 5);
+        assert!(engine.is_next_word_mode);
+        assert_eq!(engine.word_history.last().map(String::as_str), Some("bruh"));
+    }
+
+    #[test]
+    fn caret_move_into_selected_word_is_accepted() {
+        let mut engine = SuggestEngine::new_empty();
+        engine.sync_with_external_text("br", 2);
+        engine.on_word_selected("bruh");
+
+        engine.sync_with_external_text("bruh", 2);
+        assert!(!engine.is_next_word_mode);
+        assert_eq!(engine.current_word, "br");
+    }
+
+    #[test]
+    fn suggestion_candidate_slots_do_not_repeat_words() {
+        let mut engine = SuggestEngine::new_empty();
+        engine.current_word = "cant".to_string();
+        engine.recalculate();
+        let nonempty: Vec<_> = engine.candidates.iter().filter(|word| !word.is_empty()).collect();
+        for (idx, candidate) in nonempty.iter().enumerate() {
+            assert!(!nonempty[..idx].iter().any(|previous| {
+                previous.eq_ignore_ascii_case(candidate)
+            }));
+        }
+
+        engine.predict_next("a");
+        let nonempty: Vec<_> = engine.candidates.iter().filter(|word| !word.is_empty()).collect();
+        for (idx, candidate) in nonempty.iter().enumerate() {
+            assert!(!nonempty[..idx].iter().any(|previous| {
+                previous.eq_ignore_ascii_case(candidate)
+            }));
+        }
     }
 }

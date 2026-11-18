@@ -31,11 +31,10 @@ instead of creating an unusable input-method object.
 4. Start a second daemon. It must exit with an IPC message containing
    `another HyprOsk daemon is already running`, and it must not claim a second
    Wayland input-method object.
-5. Focus a GTK, Qt, Chromium/Helium, and Firefox text field. The daemon log
-   should report `input-method-v2 (write-only, readback disabled)` by default
-   (or `input-method-v2 (read/write)` if `surrounding_text_readback = true`)
-   while the field is active and should return to the virtual-keyboard
-   fallback after deactivation.
+5. Focus a GTK, Qt, Chromium/Helium, and Firefox text field. With
+   surrounding-text readback enabled by default, the daemon should report
+   input-method-v2 (read/write) while the field is active and return to the
+   virtual-keyboard fallback after deactivation.
 6. Exercise the browser inline-completion case (`w` → `www.youtube.com`). Tap
    an OSK candidate such as `we` or `well`; the field must become exactly
    `we` or `well`, never `wwe` or `wwell`. Repeat after deleting characters.
@@ -44,11 +43,17 @@ instead of creating an unusable input-method object.
    `ArrowUp`; candidates must immediately clear and stay cleared across key
    repeats, preventing misleading stale autocomplete suggestions. Then tap a
    fresh letter key (e.g. `p`); candidates must regenerate cleanly from new typing.
-8. Exercise surrounding-text readback: verify that by default
-   (`surrounding_text_readback = false`), OSK typing and suggestion selection
-   still commit text smoothly via `zwp_input_method_v2` without reading host
-   surrounding-text snapshots. When explicitly enabled (`surrounding_text_readback = true`),
-   surrounding text is read only when supported by the host.
+8. Exercise surrounding-text readback and caret movement. Type `bruh i want
+   the good shit`, move the caret to `bruh i want| the good shit`, and verify
+   suggestions switch to the word at the caret without typing another character.
+   Move the caret after `want ` and verify next-word suggestions use `want` rather
+   than the trailing `shit`. Repeat after a paste and after an external deletion.
+   Readback is enabled by default and suggestions must follow each host snapshot
+   cursor and anchor.
+9. If an application sends no surrounding-text snapshot after the caret moves,
+   input-method-v2 provides no click position for HyprOsk to infer. Compare with
+   another field that supports surrounding-text readback. Check daemon logs for
+   snapshot byte length and cursor/anchor offsets without recording entered text.
 
 ## Responsive clipboard grid check
 
@@ -246,3 +251,36 @@ and reclaims the stale IPC socket.
 
 Keep source comments short and concrete. Explain one reason or invariant; do
 not narrate code that is already clear.
+
+## Helium AT-SPI caret and paste fallback
+
+Helium must be launched after the accessibility bus is available and with
+`--force-renderer-accessibility` so editable fields expose AT-SPI text and caret
+state. While HyprOsk is active in a normal text field:
+
+1. Type a multiword phrase, move the caret into the middle of a word, and verify
+   candidates switch to the word at the caret without another keystroke.
+2. Paste a phrase, move the caret within one of its words, and verify candidates
+   follow the pasted text and caret.
+3. Select a candidate with the caret inside a word. The whole token should be
+   replaced once, including characters after the caret; punctuation after the
+   token should remain in place.
+4. Focus a password field and verify AT-SPI readback is ignored. Inspect logs:
+   they may contain byte counts and offsets, but must not contain field text.
+5. Type `br`, tap `bruh`, and verify the field contains `bruh` once and the
+   suggestion bar does not offer `bruh` again as the next word. Repeat in a
+   field that delays surrounding-text updates.
+6. Move the caret with left/right arrow keys and by swiping on the space bar.
+   Make one quick swipe across several characters, then reverse direction
+   without lifting. Verify the caret and suggestion bar follow both moves,
+   and the swipe inserts no space. Check for `spacebar swipe moved caret` in
+   the journal; `steps` should account for distance between touch updates.
+
+Fresh Wayland surrounding-text snapshots take precedence over AT-SPI readback.
+
+The Wayland text-input-v3 XML allows clients that are unaware of surrounding
+text to omit it; when sent, cursor and anchor are UTF-8 byte offsets. External
+cursor changes should be described with `set_text_change_cause`. Input-method-v2
+`commit(serial)` uses the count of received `done` events, not the count of
+commits. See the [text-input-v3 protocol XML](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/text-input/text-input-unstable-v3.xml)
+and [input-method-v2 protocol XML](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/text-input/input-method-unstable-v2.xml).

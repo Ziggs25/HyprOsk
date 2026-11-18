@@ -300,6 +300,10 @@ impl Dictionary {
             }
         }
 
+        // A committed word should not be offered as its own next word.
+        // Learned bigrams can contain accidental repeats from prior edits.
+        results.retain(|(word, _)| !word.eq_ignore_ascii_case(&prev_lower));
+
         // 3. Fallback connector words if fewer than limit results
         if results.len() < limit {
             let fallbacks = [

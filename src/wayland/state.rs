@@ -52,6 +52,7 @@ use crate::wayland::virtual_keyboard::{KEYMAP_FORMAT, create_keymap_fd};
 // Common Linux evdev keycodes
 const KEY_ESC: u32 = 1;
 const KEY_BACKSPACE: u32 = 14;
+const KEY_DELETE: u32 = 111;
 const KEY_TAB: u32 = 15;
 const KEY_ENTER: u32 = 28;
 const KEY_LEFTCTRL: u32 = 29;
@@ -2029,13 +2030,7 @@ impl WaylandState {
                 if let Some(chosen_word) = self.suggest_engine.candidates.get(idx).cloned() {
                     let cur = self.suggest_engine.current_word.clone();
                     let is_next_word = self.suggest_engine.is_next_word_mode;
-                    tracing::info!(
-                        "suggest tap idx={} cur='{}' chosen='{}' is_next_word={}",
-                        idx,
-                        cur,
-                        chosen_word,
-                        is_next_word,
-                    );
+                                        tracing::debug!(candidate_index = idx, is_next_word, "suggestion selected");
                     if is_next_word {
                         self.suggest_engine.on_word_selected(&chosen_word);
                         self.send_text(&format!("{} ", chosen_word));
@@ -2056,6 +2051,66 @@ impl WaylandState {
                             .unwrap_or_else(|| cur.clone());
                         let has_selection = self.im_state.cursor_pos != self.im_state.anchor_pos;
 
+                        // Replace the whole token when the caret sits inside it.
+                        if !has_selection
+                            && candidate_suffix_for_prefix(&cur, &chosen_word).is_some()
+                            && let Some((start, end, backspaces, forward_deletes)) = self
+                                .im_state
+                                .surrounding_text
+                                .as_deref()
+                                .and_then(|text| {
+                                    token_range_around_cursor(
+                                        text,
+                                        self.im_state.cursor_pos,
+                                        self.im_state.anchor_pos,
+                                    )
+                                    .filter(|(start, _, cursor, _, _)| {
+                                        text[*start..*cursor].eq_ignore_ascii_case(&cur)
+                                    })
+                                    .map(|(start, end, _, backspaces, forward_deletes)| {
+                                        (start, end, backspaces, forward_deletes)
+                                    })
+                                })
+                        {
+                            let needs_space = self.im_state.surrounding_text.as_deref()
+                                .and_then(|text| text.get(end..))
+                                .is_none_or(str::is_empty);
+                            let replacement = format!("{}{}", chosen_word, if needs_space { " " } else { "" });
+                            tracing::info!(
+                                delete_before = backspaces,
+                                delete_after = forward_deletes,
+                                replacement_bytes = replacement.len(),
+                                "replacing token at the caret"
+                            );
+                            for _ in 0..forward_deletes {
+                                self.send_keycode(KEY_DELETE);
+                            }
+                            for _ in 0..backspaces {
+                                self.send_backspace();
+                            }
+                            for ch in replacement.chars() {
+                                if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
+                                    self.send_key_with_modifiers(keycode, shift);
+                                } else {
+                                    self.send_text(&ch.to_string());
+                                }
+                            }
+                            if let Some(ref mut text) = self.im_state.surrounding_text
+                                && start <= end
+                                && end <= text.len()
+                                && text.is_char_boundary(start)
+                                && text.is_char_boundary(end)
+                            {
+                                text.replace_range(start..end, &replacement);
+                                let new_cursor = (start + replacement.len()) as u32;
+                                self.im_state.cursor_pos = new_cursor;
+                                self.im_state.anchor_pos = new_cursor;
+                            }
+                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.sync_layout_and_redraw(qh);
+                            return;
+                        }
+
                         // Helium may hide its inline selection from Wayland.
                         // Preserve the tracked prefix and commit only the suffix.
                         if let Some(completion_suffix) =
@@ -2073,12 +2128,7 @@ impl WaylandState {
                                 None
                             };
                             let replacement = format!("{} ", completion_suffix);
-                            tracing::info!(
-                                "suggest prefix completion: cur='{}', chosen='{}', commit='{}'",
-                                cur,
-                                chosen_word,
-                                replacement
-                            );
+                                                        tracing::info!(replacement_bytes = replacement.len(), "suggestion prefix completed");
                             self.send_text(&replacement);
                             if let Some((start, end)) = completion_range
                                 && let Some(ref mut text) = self.im_state.surrounding_text
@@ -2091,6 +2141,18 @@ impl WaylandState {
                                 let new_cursor = (start + replacement.len()) as u32;
                                 self.im_state.cursor_pos = new_cursor;
                                 self.im_state.anchor_pos = new_cursor;
+                            } else if !has_selection
+                                && let Some(ref mut text) = self.im_state.surrounding_text
+                            {
+                                let pos = text.floor_char_boundary(
+                                    (self.im_state.cursor_pos as usize).min(text.len()),
+                                );
+                                if text[..pos].ends_with(&cur) {
+                                    text.insert_str(pos, &replacement);
+                                    let new_cursor = (pos + replacement.len()) as u32;
+                                    self.im_state.cursor_pos = new_cursor;
+                                    self.im_state.anchor_pos = new_cursor;
+                                }
                             }
                             self.suggest_engine.on_word_selected(&chosen_word);
                             self.sync_layout_and_redraw(qh);
@@ -2107,12 +2169,7 @@ impl WaylandState {
                             )
                         {
                             let replacement = format!("{} ", completion_suffix);
-                            tracing::info!(
-                                "suggest host completion: keep typed prefix, replace selection {}..{} with '{}'",
-                                start,
-                                end,
-                                replacement
-                            );
+                                                        tracing::info!(replacement_bytes = replacement.len(), selection_start = start, selection_end = end, "suggestion host completion");
                             for ch in replacement.chars() {
                                 if let Some((keycode, shift)) = char_to_keycode_and_shift(ch) {
                                     self.send_key_with_modifiers(keycode, shift);
@@ -2150,13 +2207,7 @@ impl WaylandState {
                             // (leftover chars / 'bbro'). Keeping deletes + inserts on the
                             // single VK event stream guarantees FIFO ordering.
                             let replacement = format!("{} ", chosen_word);
-                            tracing::info!(
-                                "suggest vk replace: delete {} chars (cur='{}', app_word='{}'), insert '{}'",
-                                delete_count,
-                                cur,
-                                app_word,
-                                replacement
-                            );
+                                                        tracing::info!(delete_count, replacement_bytes = replacement.len(), "suggestion virtual-keyboard replacement");
                             for _ in 0..delete_count {
                                 self.send_backspace();
                             }
@@ -2250,13 +2301,13 @@ impl WaylandState {
                 self.hide_keyboard(qh);
             }
             KeyAction::ArrowLeft => {
-                self.send_arrow_left();
+                self.send_arrow_left(qh);
                 self.repeat_key = Some(KeyAction::ArrowLeft);
                 self.repeat_start = Some(Instant::now());
                 self.last_repeat_at = Some(Instant::now());
             }
             KeyAction::ArrowRight => {
-                self.send_arrow_right();
+                self.send_arrow_right(qh);
                 self.repeat_key = Some(KeyAction::ArrowRight);
                 self.repeat_start = Some(Instant::now());
                 self.last_repeat_at = Some(Instant::now());
@@ -2373,23 +2424,69 @@ impl WaylandState {
         self.sync_layout_and_redraw(qh);
     }
 
+    pub fn sync_suggest_with_atspi(
+        &mut self,
+        snapshot: crate::atspi::Snapshot,
+        qh: &QueueHandle<Self>,
+    ) {
+        if !self.im_state.is_active.load(Ordering::Relaxed)
+            || matches!(self.im_state.content_purpose, 8 | 9)
+            || self.im_state.content_hint & (0x40 | 0x80) != 0
+            || snapshot.text.len() > 16 * 1024
+        {
+            return;
+        }
+        if self
+            .im_state
+            .last_wayland_snapshot_at
+            .is_some_and(|last| last.elapsed() < Duration::from_millis(500))
+        {
+            return;
+        }
+        let cursor = snapshot.cursor_bytes;
+        let Ok(cursor_u32) = u32::try_from(cursor) else {
+            return;
+        };
+        if cursor > snapshot.text.len() || !snapshot.text.is_char_boundary(cursor) {
+            return;
+        }
+        if self.im_state.surrounding_text.as_deref() == Some(&snapshot.text)
+            && self.im_state.cursor_pos == cursor_u32
+            && self.im_state.anchor_pos == cursor_u32
+        {
+            return;
+        }
+
+        self.im_state.surrounding_text = Some(snapshot.text.clone());
+        self.im_state.cursor_pos = cursor_u32;
+        self.im_state.anchor_pos = cursor_u32;
+        self.sync_suggest_with_surrounding(&snapshot.text, cursor_u32, true, qh);
+    }
+
     pub fn sync_suggest_with_surrounding(
         &mut self,
         text: &str,
         cursor: u32,
+        authoritative: bool,
         qh: &QueueHandle<Self>,
     ) {
         tracing::info!(
-            "sync_suggest surrounding='{}' cursor={} current='{}' before sync",
-            text,
+            surrounding_bytes = text.len(),
             cursor,
-            self.suggest_engine.current_word
+            authoritative,
+            "syncing suggestions from host surrounding text"
         );
-        self.suggest_engine.sync_with_text(text, cursor as usize);
+        if authoritative {
+            self.suggest_engine
+                .sync_with_external_text(text, cursor as usize);
+        } else {
+            self.suggest_engine.sync_with_text(text, cursor as usize);
+        }
         tracing::info!(
-            "sync_suggest after current='{}' candidates={:?}",
-            self.suggest_engine.current_word,
-            self.suggest_engine.candidates
+            current_word_bytes = self.suggest_engine.current_word.len(),
+            candidate_count = self.suggest_engine.candidates.len(),
+            next_word_mode = self.suggest_engine.is_next_word_mode,
+            "suggestion context updated"
         );
         self.sync_layout_and_redraw(qh);
     }
@@ -2415,10 +2512,10 @@ impl WaylandState {
                             self.sync_layout_and_redraw(qh);
                         }
                         KeyAction::ArrowLeft => {
-                            self.send_arrow_left();
+                            self.send_arrow_left(qh);
                         }
                         KeyAction::ArrowRight => {
-                            self.send_arrow_right();
+                            self.send_arrow_right(qh);
                         }
                         KeyAction::ArrowUp => {
                             self.send_arrow_up();
@@ -2859,7 +2956,7 @@ impl WaylandState {
             .unwrap_or_else(|| left.clone());
         let slots = vec![left, best, right];
         let best = slots[1].clone();
-        tracing::info!("swipe recognized '{}'", best);
+        tracing::info!(candidate_bytes = best.len(), "swipe candidate recognized");
         self.suggest_engine.candidates = slots;
         self.suggest_engine.is_next_word_mode = false;
         let suggestion_key = self
@@ -2919,15 +3016,20 @@ impl WaylandState {
         if let Some((start_x, _)) = self.space_touch_start {
             let delta = x - self.space_last_x;
             let step_threshold = 18.0;
+            let steps = (delta.abs() / step_threshold).floor() as usize;
 
-            if delta.abs() >= step_threshold {
+            if steps > 0 {
                 self.is_space_swiping = true;
-                if delta < 0.0 {
-                    self.send_arrow_left();
-                } else {
-                    self.send_arrow_right();
+                let right = delta > 0.0;
+                for _ in 0..steps {
+                    if right {
+                        self.send_arrow_right(qh);
+                    } else {
+                        self.send_arrow_left(qh);
+                    }
                 }
-                self.space_last_x = x;
+                self.space_last_x += step_threshold * steps as f64 * delta.signum();
+                tracing::info!(steps, right, "spacebar swipe moved caret");
             }
 
             self.swipe_offset = Some((x - start_x) as f32);
@@ -2938,14 +3040,14 @@ impl WaylandState {
     pub fn send_text(&mut self, text: &str) {
         let has_mods = ((self.pending_mods | self.held_mods) & !Self::MOD_SHIFT) != 0;
         let source = self.active_text_input_source();
-        tracing::info!(
-            "send_text '{}' source={} has_mods={} surrounding={:?} cursor={} anchor={}",
-            text,
-            source.label_with_readback(self.config.behavior.surrounding_text_readback),
+                tracing::info!(
+            text_bytes = text.len(),
+            source = source.label_with_readback(self.config.behavior.surrounding_text_readback),
             has_mods,
-            self.im_state.surrounding_text,
-            self.im_state.cursor_pos,
-            self.im_state.anchor_pos,
+            surrounding_bytes = self.im_state.surrounding_text.as_ref().map_or(0, |text| text.len()),
+            cursor = self.im_state.cursor_pos,
+            anchor = self.im_state.anchor_pos,
+            "send_text"
         );
         if source == TextInputSource::VirtualKeyboard && !self.fallback_warning_emitted {
             tracing::warn!(
@@ -2957,7 +3059,6 @@ impl WaylandState {
         if use_im && let Some(ref im) = self.input_method {
             im.commit_string(text.to_string());
             im.commit(self.im_state.serial);
-            self.im_state.serial = self.im_state.serial.wrapping_add(1);
             tracing::info!("send_text via commit_string");
             return;
         }
@@ -3023,12 +3124,50 @@ impl WaylandState {
         }
     }
 
-    pub fn send_arrow_left(&mut self) {
+    pub fn send_arrow_left(&mut self, qh: &QueueHandle<Self>) {
         self.send_keycode(KEY_LEFT);
+        self.sync_horizontal_caret(false, qh);
     }
 
-    pub fn send_arrow_right(&mut self) {
+    pub fn send_arrow_right(&mut self, qh: &QueueHandle<Self>) {
         self.send_keycode(KEY_RIGHT);
+        self.sync_horizontal_caret(true, qh);
+    }
+
+    fn sync_horizontal_caret(&mut self, right: bool, qh: &QueueHandle<Self>) {
+        let Some(text) = self.im_state.surrounding_text.clone() else {
+            self.suggest_engine.clear();
+            self.sync_layout_and_redraw(qh);
+            return;
+        };
+        let cursor = self.im_state.cursor_pos as usize;
+        let anchor = self.im_state.anchor_pos as usize;
+        if cursor > text.len()
+            || anchor > text.len()
+            || !text.is_char_boundary(cursor)
+            || !text.is_char_boundary(anchor)
+        {
+            self.suggest_engine.clear();
+            self.sync_layout_and_redraw(qh);
+            return;
+        }
+
+        let next = if cursor != anchor {
+            if right { cursor.max(anchor) } else { cursor.min(anchor) }
+        } else if right {
+            text[cursor..]
+                .chars()
+                .next()
+                .map_or(cursor, |ch| cursor + ch.len_utf8())
+        } else {
+            text[..cursor]
+                .char_indices()
+                .last()
+                .map_or(0, |(index, _)| index)
+        };
+        self.im_state.cursor_pos = next as u32;
+        self.im_state.anchor_pos = next as u32;
+        self.sync_suggest_with_surrounding(&text, next as u32, true, qh);
     }
 
     pub fn send_arrow_up(&mut self) {
@@ -3792,6 +3931,37 @@ impl TouchHandler for WaylandState {
 }
 
 /// Return backspaces and an optional text range for a suggestion replacement.
+fn token_range_around_cursor(
+    text: &str,
+    cursor_pos: u32,
+    anchor_pos: u32,
+) -> Option<(usize, usize, usize, usize, usize)> {
+    let cursor = text.floor_char_boundary((cursor_pos as usize).min(text.len()));
+    let anchor = text.floor_char_boundary((anchor_pos as usize).min(text.len()));
+    if cursor != anchor {
+        return None;
+    }
+    let start = text[..cursor]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_alphabetic() && *ch != '\'')
+        .map_or(0, |(index, ch)| index + ch.len_utf8());
+    let end = text[cursor..]
+        .char_indices()
+        .find(|(_, ch)| !ch.is_alphabetic() && *ch != '\'')
+        .map_or(text.len(), |(index, _)| cursor + index);
+    if start >= cursor || cursor >= end {
+        return None;
+    }
+    Some((
+        start,
+        end,
+        cursor,
+        text[start..cursor].chars().count(),
+        text[cursor..end].chars().count(),
+    ))
+}
+
 pub fn calculate_replacement_target(
     current_word: &str,
     surrounding_text: Option<&str>,
