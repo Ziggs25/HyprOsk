@@ -235,6 +235,22 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylandState {
                         return;
                     }
 
+                    if !external
+                        && state.suggest_engine.is_recent_inline_completion_echo(
+                            &text,
+                            cursor as usize,
+                            anchor as usize,
+                        )
+                    {
+                        tracing::info!(
+                            surrounding_bytes = text.len(),
+                            cursor,
+                            anchor,
+                            "ignoring stale inline-completion selection echo"
+                        );
+                        return;
+                    }
+
                     let moved = cursor != state.im_state.cursor_pos
                         || anchor != state.im_state.anchor_pos;
                     // A normal input-method echo may trail local typing by a character.

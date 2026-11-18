@@ -2053,6 +2053,11 @@ impl WaylandState {
             }
             KeyAction::Suggestion(idx) => {
                 if let Some(chosen_word) = self.suggest_engine.candidates.get(idx).cloned() {
+                    self.suggest_engine.remember_preselection_snapshot(
+                        self.im_state.surrounding_text.as_deref(),
+                        self.im_state.cursor_pos as usize,
+                        self.im_state.anchor_pos as usize,
+                    );
                     let cur = self.suggest_engine.current_word.clone();
                     let is_next_word = self.suggest_engine.is_next_word_mode;
                                         tracing::debug!(candidate_index = idx, is_next_word, "suggestion selected");
@@ -2075,6 +2080,25 @@ impl WaylandState {
                             })
                             .unwrap_or_else(|| cur.clone());
                         let has_selection = self.im_state.cursor_pos != self.im_state.anchor_pos;
+                        let host_selection = host_completion_prefix_and_range(
+                            self.im_state.surrounding_text.as_deref(),
+                            self.im_state.cursor_pos,
+                            self.im_state.anchor_pos,
+                        )
+                        .map(|(prefix, range)| (prefix.to_owned(), range));
+                        let host_prefix_is_stale = host_selection
+                            .as_ref()
+                            .is_some_and(|(prefix, _)| {
+                                let prefix_chars = prefix.chars().count();
+                                prefix_chars < cur.chars().count()
+                                    && cur
+                                        .chars()
+                                        .take(prefix_chars)
+                                        .collect::<String>()
+                                        .eq_ignore_ascii_case(prefix)
+                            });
+                        let case_only_candidate =
+                            chosen_word != cur && chosen_word.eq_ignore_ascii_case(&cur);
 
                         // Replace the whole token when the caret sits inside it.
                         if !has_selection
@@ -2138,24 +2162,54 @@ impl WaylandState {
 
                         // Helium may hide its inline selection from Wayland.
                         // Preserve the tracked prefix and commit only the suffix.
-                        if let Some(completion_suffix) =
+                        if !case_only_candidate
+                            && let Some(completion_suffix) =
                             candidate_suffix_for_prefix(&cur, &chosen_word)
                         {
-                            let completion_range = if has_selection {
-                                host_completion_suffix(
-                                    self.im_state.surrounding_text.as_deref(),
-                                    self.im_state.cursor_pos,
-                                    self.im_state.anchor_pos,
-                                    &chosen_word,
-                                )
-                                .map(|(_, range)| range)
-                            } else {
-                                None
-                            };
+                            // Trust a selected completion only when it starts after
+                            // the same prefix that HyprOsk tracked locally.
+                            let selected_suffix = host_selection
+                                .as_ref()
+                                .filter(|(prefix, _)| prefix.eq_ignore_ascii_case(&cur))
+                                .and_then(|(prefix, range)| {
+                                    candidate_suffix_for_prefix(prefix, &chosen_word)
+                                        .map(|suffix| (suffix, *range))
+                                });
+                            let (completion_suffix, completion_range) = selected_suffix
+                                .map_or((completion_suffix, None), |(suffix, range)| {
+                                    (suffix, Some(range))
+                                });
                             let replacement = format!("{} ", completion_suffix);
-                                                        tracing::info!(replacement_bytes = replacement.len(), "suggestion prefix completed");
-                            self.send_text(&replacement);
+                            tracing::info!(
+                                replacement_bytes = replacement.len(),
+                                selected_host_completion = completion_range.is_some(),
+                                stale_host_selection = host_prefix_is_stale,
+                                "suggestion prefix completed"
+                            );
+                            if has_selection && !completion_suffix.is_empty() {
+                                // Keep selected-completion replacement on one input
+                                // stream. Preflight the whole string so unsupported
+                                // characters never cause a partial VK/IM mixture.
+                                let key_events = replacement
+                                    .chars()
+                                    .map(char_to_keycode_and_shift)
+                                    .collect::<Option<Vec<_>>>();
+                                if let Some(key_events) = key_events {
+                                    for (keycode, shift) in key_events {
+                                        self.send_key_with_modifiers(keycode, shift);
+                                    }
+                                } else {
+                                    self.send_text(&replacement);
+                                }
+                            } else if completion_suffix.is_empty() {
+                                // Chromium's omnibox handles a real Space key
+                                // differently from an IM commit containing only a space.
+                                self.send_keycode(KEY_SPACE);
+                            } else {
+                                self.send_text(&replacement);
+                            }
                             if let Some((start, end)) = completion_range
+                                && !completion_suffix.is_empty()
                                 && let Some(ref mut text) = self.im_state.surrounding_text
                                 && start <= end
                                 && end <= text.len()
@@ -2167,6 +2221,7 @@ impl WaylandState {
                                 self.im_state.cursor_pos = new_cursor;
                                 self.im_state.anchor_pos = new_cursor;
                             } else if !has_selection
+                                && !host_prefix_is_stale
                                 && let Some(ref mut text) = self.im_state.surrounding_text
                             {
                                 let pos = text.floor_char_boundary(
@@ -2185,7 +2240,8 @@ impl WaylandState {
                         }
 
                         // Replace only the selected browser-completion suffix.
-                        if has_selection
+                        if !case_only_candidate
+                            && has_selection
                             && let Some((completion_suffix, (start, end))) = host_completion_suffix(
                                 self.im_state.surrounding_text.as_deref(),
                                 self.im_state.cursor_pos,
@@ -2224,7 +2280,7 @@ impl WaylandState {
                         if !has_selection && chosen_word == app_word {
                             tracing::info!("suggest same -> space");
                             self.record_suggestion_word(&chosen_word, explicit_selection);
-                            self.send_text(" ");
+                            self.send_keycode(KEY_SPACE);
                         } else {
                             // Unified virtual-keyboard replacement: Chromium/Ozone Wayland drops
                             // zwp_input_method_v2::delete_surrounding_text, and mixing VK
@@ -2244,7 +2300,9 @@ impl WaylandState {
                                 }
                             }
                             if let Some(ref mut text) = self.im_state.surrounding_text {
-                                if let Some((start, end)) = replace_range {
+                                if !host_prefix_is_stale
+                                    && let Some((start, end)) = replace_range
+                                {
                                     if start <= end
                                         && end <= text.len()
                                         && text.is_char_boundary(start)
@@ -2255,7 +2313,7 @@ impl WaylandState {
                                         self.im_state.cursor_pos = new_cursor;
                                         self.im_state.anchor_pos = new_cursor;
                                     }
-                                } else {
+                                } else if !host_prefix_is_stale {
                                     let pos = text.floor_char_boundary(
                                         (self.im_state.cursor_pos as usize).min(text.len()),
                                     );
@@ -2469,6 +2527,23 @@ impl WaylandState {
             return;
         }
         let cursor = snapshot.cursor_bytes;
+        if !self.im_state.pending_external_change
+            && !self.im_state.pending_arrow_navigation
+            && !self
+                .last_arrow_at
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(500))
+            && self
+                .suggest_engine
+                .is_recent_atspi_inline_completion_echo(&snapshot.text, cursor)
+        {
+            tracing::info!(
+                surrounding_bytes = snapshot.text.len(),
+                cursor,
+                current_word_bytes = self.suggest_engine.current_word.len(),
+                "ignoring stale AT-SPI inline-completion snapshot"
+            );
+            return;
+        }
         let Ok(cursor_u32) = u32::try_from(cursor) else {
             return;
         };
@@ -2501,12 +2576,12 @@ impl WaylandState {
             authoritative,
             "syncing suggestions from host surrounding text"
         );
-        if authoritative {
-            self.suggest_engine
-                .sync_with_external_text(text, cursor as usize);
-        } else {
-            self.suggest_engine.sync_with_text(text, cursor as usize);
-        }
+        self.suggest_engine.sync_with_snapshot(
+            text,
+            self.im_state.cursor_pos as usize,
+            self.im_state.anchor_pos as usize,
+            authoritative,
+        );
         tracing::info!(
             current_word_bytes = self.suggest_engine.current_word.len(),
             candidate_count = self.suggest_engine.candidates.len(),
@@ -4111,13 +4186,12 @@ pub fn candidate_suffix_for_prefix(current_word: &str, chosen_word: &str) -> Opt
     Some(chosen_word.chars().skip(prefix_len).collect())
 }
 
-/// Return the suffix and selected range reported by the host.
-pub fn host_completion_suffix(
+/// Return the typed prefix and selected range for a host inline completion.
+pub fn host_completion_prefix_and_range(
     surrounding_text: Option<&str>,
     cursor_pos: u32,
     anchor_pos: u32,
-    chosen_word: &str,
-) -> Option<(String, (usize, usize))> {
+) -> Option<(&str, (usize, usize))> {
     let text = surrounding_text?;
     let cursor = text.floor_char_boundary((cursor_pos as usize).min(text.len()));
     let anchor = text.floor_char_boundary((anchor_pos as usize).min(text.len()));
@@ -4127,14 +4201,29 @@ pub fn host_completion_suffix(
 
     let selection_start = cursor.min(anchor);
     let selection_end = cursor.max(anchor);
+    if selection_end != text.len() {
+        return None;
+    }
     let token_start = text[..selection_start]
         .char_indices()
         .rev()
         .find(|(_, ch)| ch.is_whitespace())
         .map_or(0, |(index, ch)| index + ch.len_utf8());
     let typed_prefix = &text[token_start..selection_start];
+    (!typed_prefix.is_empty()).then_some((typed_prefix, (selection_start, selection_end)))
+}
+
+/// Return the suffix and selected range reported by the host.
+pub fn host_completion_suffix(
+    surrounding_text: Option<&str>,
+    cursor_pos: u32,
+    anchor_pos: u32,
+    chosen_word: &str,
+) -> Option<(String, (usize, usize))> {
+    let (typed_prefix, range) =
+        host_completion_prefix_and_range(surrounding_text, cursor_pos, anchor_pos)?;
     let suffix = candidate_suffix_for_prefix(typed_prefix, chosen_word)?;
-    Some((suffix, (selection_start, selection_end)))
+    Some((suffix, range))
 }
 
 /// Linux evdev keycode mapping for US QWERTY virtual keyboard fallback

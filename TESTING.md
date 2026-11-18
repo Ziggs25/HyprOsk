@@ -38,22 +38,27 @@ instead of creating an unusable input-method object.
 6. Exercise the browser inline-completion case (`w` → `www.youtube.com`). Tap
    an OSK candidate such as `we` or `well`; the field must become exactly
    `we` or `well`, never `wwe` or `wwell`. Repeat after deleting characters.
-7. Exercise OSK ArrowUp/ArrowDown candidate clearing: type a prefix (e.g. `hel`)
+7. Exercise Helium's delayed inline-completion snapshots: type `gya` in the
+   address bar until Helium shows a completion, then tap `gyatt`. The result
+   must be `gyatt `, without a duplicated character. Also type `i` and tap
+   case-only candidate `I`; the result must preserve `I` and end in a space.
+   Repeat in an ordinary webpage field to confirm normal input behavior.
+8. Exercise OSK ArrowUp/ArrowDown candidate clearing: type a prefix (e.g. `hel`)
    so suggestion candidates appear on the OSK bar. Tap or hold OSK `ArrowDown` or
    `ArrowUp`; candidates must immediately clear and stay cleared across key
    repeats, preventing misleading stale autocomplete suggestions. Then tap a
    fresh letter key (e.g. `p`); candidates must regenerate cleanly from new typing.
-8. Exercise surrounding-text readback and caret movement. Type `bruh i want
+9. Exercise surrounding-text readback and caret movement. Type `bruh i want
    the good shit`, move the caret to `bruh i want| the good shit`, and verify
    suggestions switch to the word at the caret without typing another character.
    Move the caret after `want ` and verify next-word suggestions use `want` rather
    than the trailing `shit`. Repeat after a paste and after an external deletion.
    Readback is enabled by default and suggestions must follow each host snapshot
    cursor and anchor.
-9. If an application sends no surrounding-text snapshot after the caret moves,
-   input-method-v2 provides no click position for HyprOsk to infer. Compare with
-   another field that supports surrounding-text readback. Check daemon logs for
-   snapshot byte length and cursor/anchor offsets without recording entered text.
+10. If an application sends no surrounding-text snapshot after the caret moves,
+    input-method-v2 provides no click position for HyprOsk to infer. Compare with
+    another field that supports surrounding-text readback. Check daemon logs for
+    snapshot byte length and cursor/anchor offsets without recording entered text.
 
 ## Responsive clipboard grid check
 

@@ -2,10 +2,18 @@ use crate::suggest::dictionary::Dictionary;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
+struct PreselectionSnapshot {
+    surrounding: String,
+    cursor: usize,
+    anchor: usize,
+}
+
+#[derive(Debug, Clone)]
 struct PendingSelectionEcho {
     selected_word: String,
     previous_history: Vec<String>,
     previous_current_word: String,
+    preselection_snapshot: Option<PreselectionSnapshot>,
     started_at: Instant,
 }
 
@@ -17,6 +25,8 @@ pub struct SuggestEngine {
     pub candidates: Vec<String>,
     pub is_next_word_mode: bool,
     pending_selection_echo: Option<PendingSelectionEcho>,
+    next_preselection_snapshot: Option<PreselectionSnapshot>,
+    last_local_word_input_at: Option<Instant>,
 }
 
 impl Default for SuggestEngine {
@@ -34,6 +44,8 @@ impl SuggestEngine {
             candidates: Vec::new(),
             is_next_word_mode: false,
             pending_selection_echo: None,
+            next_preselection_snapshot: None,
+            last_local_word_input_at: None,
         }
     }
 
@@ -46,11 +58,14 @@ impl SuggestEngine {
             candidates: Vec::new(),
             is_next_word_mode: false,
             pending_selection_echo: None,
+            next_preselection_snapshot: None,
+            last_local_word_input_at: None,
         }
     }
 
     pub fn push_char(&mut self, ch: char) {
         if ch.is_alphabetic() || ch == '\'' {
+            self.last_local_word_input_at = Some(Instant::now());
             if self.is_next_word_mode {
                 self.is_next_word_mode = false;
                 self.current_word.clear();
@@ -58,8 +73,10 @@ impl SuggestEngine {
             self.current_word.push(ch);
             self.recalculate();
         } else if ch == ' ' {
+            self.last_local_word_input_at = None;
             self.on_space();
         } else if ch == '.' || ch == '?' || ch == '!' {
+            self.last_local_word_input_at = None;
             if !self.current_word.is_empty() {
                 let typed = std::mem::take(&mut self.current_word);
                 self.word_history.push(typed);
@@ -67,11 +84,13 @@ impl SuggestEngine {
             self.word_history.clear();
             self.clear();
         } else {
+            self.last_local_word_input_at = None;
             self.on_space();
         }
     }
 
     pub fn pop_char(&mut self) {
+        self.last_local_word_input_at = None;
         if self.is_next_word_mode {
             // The cursor was right after a space following the last word.
             // This backspace deleted that trailing space from the text box.
@@ -112,15 +131,71 @@ impl SuggestEngine {
     }
 
     pub fn sync_with_text(&mut self, surrounding: &str, cursor_bytes: usize) {
-        self.sync_with_text_inner(surrounding, cursor_bytes, false);
+        self.sync_with_snapshot(surrounding, cursor_bytes, cursor_bytes, false);
     }
 
     pub fn sync_with_external_text(&mut self, surrounding: &str, cursor_bytes: usize) {
-        self.sync_with_text_inner(surrounding, cursor_bytes, true);
+        self.sync_with_snapshot(surrounding, cursor_bytes, cursor_bytes, true);
     }
 
-    fn sync_with_text_inner(&mut self, surrounding: &str, cursor_bytes: usize, external: bool) {
-        let valid_len = surrounding.floor_char_boundary(surrounding.len().min(cursor_bytes));
+    pub fn sync_with_snapshot(
+        &mut self,
+        surrounding: &str,
+        cursor_bytes: usize,
+        anchor_bytes: usize,
+        external: bool,
+    ) {
+        self.sync_with_text_inner(surrounding, cursor_bytes, anchor_bytes, external);
+    }
+
+    pub fn is_recent_inline_completion_echo(
+        &self,
+        surrounding: &str,
+        cursor_bytes: usize,
+        anchor_bytes: usize,
+    ) -> bool {
+        let Some(prefix) = inline_completion_prefix(surrounding, cursor_bytes, anchor_bytes) else {
+            return false;
+        };
+        self.is_recent_strict_word_prefix(prefix)
+    }
+
+    pub fn is_recent_atspi_inline_completion_echo(
+        &self,
+        surrounding: &str,
+        cursor_bytes: usize,
+    ) -> bool {
+        if cursor_bytes >= surrounding.len() || !surrounding.is_char_boundary(cursor_bytes) {
+            return false;
+        }
+        let prefix = surrounding[..cursor_bytes]
+            .rsplit(|ch: char| !ch.is_alphabetic() && ch != '\'')
+            .next()
+            .unwrap_or("");
+        self.is_recent_strict_word_prefix(prefix)
+    }
+
+    fn is_recent_strict_word_prefix(&self, prefix: &str) -> bool {
+        let prefix_chars = prefix.chars().count();
+        let tracked_prefix = self.current_word.chars().take(prefix_chars).collect::<String>();
+        !self.current_word.is_empty()
+            && !prefix.is_empty()
+            && prefix_chars < self.current_word.chars().count()
+            && tracked_prefix.eq_ignore_ascii_case(prefix)
+            && self
+                .last_local_word_input_at
+                .is_some_and(|at| at.elapsed() <= Duration::from_millis(500))
+    }
+
+    fn sync_with_text_inner(
+        &mut self,
+        surrounding: &str,
+        cursor_bytes: usize,
+        anchor_bytes: usize,
+        external: bool,
+    ) {
+        let caret_bytes = cursor_bytes.min(anchor_bytes);
+        let valid_len = surrounding.floor_char_boundary(surrounding.len().min(caret_bytes));
         let before = &surrounding[..valid_len];
         let words: Vec<String> = before
             .split(|c: char| !c.is_alphabetic() && c != '\'')
@@ -128,7 +203,27 @@ impl SuggestEngine {
             .map(|w| w.to_string())
             .collect();
 
-        if self.should_ignore_pending_selection_echo(surrounding, valid_len, before, &words) {
+        if !external
+            && self.is_recent_inline_completion_echo(surrounding, cursor_bytes, anchor_bytes)
+        {
+            tracing::debug!(
+                surrounding_bytes = surrounding.len(),
+                cursor_bytes,
+                anchor_bytes,
+                current_word_bytes = self.current_word.len(),
+                "ignoring stale inline-completion snapshot for suggestions"
+            );
+            return;
+        }
+
+        if self.should_ignore_pending_selection_echo(
+            surrounding,
+            cursor_bytes,
+            anchor_bytes,
+            valid_len,
+            before,
+            &words,
+        ) {
             return;
         }
 
@@ -200,6 +295,8 @@ impl SuggestEngine {
         &mut self,
         surrounding: &str,
         cursor_bytes: usize,
+        anchor_bytes: usize,
+        before_cursor_bytes: usize,
         before: &str,
         words: &[String],
     ) -> bool {
@@ -212,7 +309,23 @@ impl SuggestEngine {
             return false;
         }
 
-        if selected_text_covers_cursor(surrounding, cursor_bytes, &pending.selected_word) {
+        if pending
+            .preselection_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| {
+                snapshot.surrounding == surrounding
+                    && snapshot.cursor == cursor_bytes
+                    && snapshot.anchor == anchor_bytes
+            })
+        {
+            return true;
+        }
+
+        if selected_text_covers_cursor(
+            surrounding,
+            before_cursor_bytes,
+            &pending.selected_word,
+        ) {
             self.pending_selection_echo = None;
             return false;
         }
@@ -226,6 +339,7 @@ impl SuggestEngine {
     }
 
     pub fn on_space(&mut self) {
+        self.last_local_word_input_at = None;
         if !self.current_word.is_empty() {
             let typed = std::mem::take(&mut self.current_word);
             // Record unigram in user dictionary (transient on first type)
@@ -244,15 +358,36 @@ impl SuggestEngine {
         }
     }
 
+    pub fn remember_preselection_snapshot(
+        &mut self,
+        surrounding: Option<&str>,
+        cursor: usize,
+        anchor: usize,
+    ) {
+        self.next_preselection_snapshot = surrounding.map(|surrounding| PreselectionSnapshot {
+            surrounding: surrounding.to_owned(),
+            cursor,
+            anchor,
+        });
+    }
+
     pub fn on_word_selected(&mut self, chosen_word: &str) {
-        self.on_word_committed(chosen_word, true);
+        let preselection_snapshot = self.next_preselection_snapshot.take();
+        self.on_word_committed(chosen_word, true, preselection_snapshot);
     }
 
     pub fn on_swipe_word_committed(&mut self, chosen_word: &str) {
-        self.on_word_committed(chosen_word, false);
+        self.next_preselection_snapshot = None;
+        self.on_word_committed(chosen_word, false, None);
     }
 
-    fn on_word_committed(&mut self, chosen_word: &str, explicit_selection: bool) {
+    fn on_word_committed(
+        &mut self,
+        chosen_word: &str,
+        explicit_selection: bool,
+        preselection_snapshot: Option<PreselectionSnapshot>,
+    ) {
+        self.last_local_word_input_at = None;
         let chosen_clean = chosen_word.trim().to_string();
         self.pending_selection_echo = if chosen_clean.is_empty() {
             None
@@ -261,6 +396,7 @@ impl SuggestEngine {
                 selected_word: chosen_clean.clone(),
                 previous_history: self.word_history.clone(),
                 previous_current_word: self.current_word.clone(),
+                preselection_snapshot,
                 started_at: Instant::now(),
             })
         };
@@ -311,6 +447,8 @@ impl SuggestEngine {
         self.candidates.clear();
         self.is_next_word_mode = false;
         self.pending_selection_echo = None;
+        self.next_preselection_snapshot = None;
+        self.last_local_word_input_at = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -443,6 +581,29 @@ fn matches_preselection_context(
     let previous_lower = pending.previous_current_word.to_lowercase();
     let lagging_lower = lagging_word.to_lowercase();
     previous_lower.starts_with(&lagging_lower)
+}
+
+fn inline_completion_prefix(
+    surrounding: &str,
+    cursor_bytes: usize,
+    anchor_bytes: usize,
+) -> Option<&str> {
+    let start = cursor_bytes.min(anchor_bytes);
+    let end = cursor_bytes.max(anchor_bytes);
+    if start == end
+        || end != surrounding.len()
+        || start == 0
+        || start > surrounding.len()
+        || !surrounding.is_char_boundary(start)
+    {
+        return None;
+    }
+
+    let before_selection = &surrounding[..start];
+    let prefix = before_selection
+        .rsplit(|ch: char| !ch.is_alphabetic() && ch != '\'')
+        .next()?;
+    (!prefix.is_empty()).then_some(prefix)
 }
 
 fn selected_text_covers_cursor(surrounding: &str, cursor_bytes: usize, selected: &str) -> bool {
