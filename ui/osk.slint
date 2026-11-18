@@ -248,8 +248,8 @@ component KeyVisual {
         Image {
             visible: k.icon > 0 && k.key-type != KeyType.suggestion;
             property <length> display-size: OskTheme.icon-size
-                + (((k.icon == 1) || (k.icon == 2) || (k.icon == 3)
-                    || (k.icon == 4) || (k.icon == 34)) ? 4px : 0px);
+                + (((k.icon == 1) || (k.icon == 2) || (k.icon == 34)) ? 6px
+                    : (((k.icon == 3) || (k.icon == 4)) ? 4px : 0px));
             x: (parent.width - display-size) / 2;
             y: (parent.height - display-size) / 2;
             width: display-size;

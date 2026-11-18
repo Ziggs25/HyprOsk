@@ -1167,18 +1167,19 @@ impl WaylandState {
             self.sync_mods();
             tracing::info!("caps lock OFF");
             self.sync_layout_and_redraw(qh);
-        } else if raised {
-            // Tap from Lower: DOWN already raised to Upper -> keep latched one-shot.
-            self.pending_mods |= Self::MOD_SHIFT;
-            self.sync_mods();
-            self.sync_layout_and_redraw(qh);
         } else if double {
+            // A second quick tap turns the one-shot Shift latch into Caps Lock.
             self.caps_lock = true;
             self.current_layer = LayerId::Upper;
             self.pending_mods |= Self::MOD_SHIFT;
             self.last_shift_press = None;
             self.sync_mods();
             tracing::info!("caps lock ON via double tap");
+            self.sync_layout_and_redraw(qh);
+        } else if raised {
+            // Tap from Lower: DOWN already raised to Upper -> keep latched one-shot.
+            self.pending_mods |= Self::MOD_SHIFT;
+            self.sync_mods();
             self.sync_layout_and_redraw(qh);
         } else {
             // Tap while Upper was already latched: unlatch back to Lower.

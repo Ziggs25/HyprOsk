@@ -97,8 +97,8 @@ pub mod icon {
 
 const BACKSPACE_SVG: &str = include_str!("../../assets/keyboard-icons/backspace.svg");
 const ENTER_SVG: &str = include_str!("../../assets/keyboard-icons/return-key.svg");
-const SHIFT_SVG: &str = include_str!("../../assets/keyboard-icons/shift-hold.svg");
-const CAPSLOCK_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 14h6v3h4v-3h6L12 3 4 14zm-1 7h18"/></svg>"##;
+const SHIFT_SVG: &str = include_str!("../../assets/keyboard-icons/up-arrow.svg");
+const CAPSLOCK_SVG: &str = include_str!("../../assets/keyboard-icons/shift-hold.svg");
 const WIN_SVG: &str = include_str!("../../assets/keyboard-icons/super-key-2.svg");
 const TAB_SVG: &str = include_str!("../../assets/keyboard-icons/tab-key.svg");
 const MIC_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-2.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>"##;
