@@ -144,6 +144,7 @@ impl SwipeTrace {
 /// while capping pool growth (sctk grows the pool only when the freelist is
 /// exhausted).
 const IN_FLIGHT_BUFFERS: usize = 3;
+const TOUCH_PRESS_FEEDBACK_DURATION: Duration = Duration::from_millis(96);
 
 pub struct WaylandState {
     // SCTK base states
@@ -208,6 +209,8 @@ pub struct WaylandState {
     pub suggest_engine: SuggestEngine,
     pub pressed_key: Option<(usize, usize)>,
     pub pressed_keys: Vec<(usize, usize)>,
+    /// Keeps quick touch taps visible until the compositor presents a frame.
+    pub touch_press_feedback: HashMap<(usize, usize), (KeyAction, Instant)>,
     pub active_touches: HashMap<i32, (usize, usize)>,
     pub pending_taps: HashMap<i32, (usize, usize)>,
     pub pending_tap_details: HashMap<i32, (KeyAction, Option<String>, Instant)>,
@@ -389,6 +392,7 @@ impl WaylandState {
             suggest_engine,
             pressed_key: None,
             pressed_keys: Vec::new(),
+            touch_press_feedback: HashMap::new(),
             active_touches: HashMap::new(),
             pending_taps: HashMap::new(),
             pending_tap_details: HashMap::new(),
@@ -1816,6 +1820,7 @@ impl WaylandState {
             self.base_frame.clear();
         }
 
+        let visual_pressed_keys = self.touch_visual_pressed_keys();
         let latched_keys = self.latched_positions();
         // Draw into the first buffer whose slot is free (i.e. released by the
         // compositor). If all are still in flight, skip this frame — the
@@ -1853,7 +1858,7 @@ impl WaylandState {
                     &self.theme,
                     width,
                     height,
-                    &self.pressed_keys,
+                    &visual_pressed_keys,
                     &latched_keys,
                     self.swipe_offset,
                     self.hold_preview.clone(),
@@ -1875,7 +1880,7 @@ impl WaylandState {
                     height,
                     &self.layout,
                     &self.theme,
-                    &self.pressed_keys,
+                    &visual_pressed_keys,
                     &latched_keys,
                     self.swipe_offset,
                 );
@@ -2626,6 +2631,46 @@ impl WaylandState {
             || self.fading_swipe_trail.is_some()
             || self.repeat_key.is_some()
             || self.hold_preview.is_some()
+            || !self.touch_press_feedback.is_empty()
+    }
+
+    fn same_touch_feedback_key(pressed: &KeyAction, current: &KeyAction) -> bool {
+        match (pressed, current) {
+            (KeyAction::Text(_), KeyAction::Text(_))
+            | (KeyAction::SwitchLayer(_), KeyAction::SwitchLayer(_)) => true,
+            _ => pressed == current,
+        }
+    }
+
+    fn touch_visual_pressed_keys(&self) -> Vec<(usize, usize)> {
+        let now = Instant::now();
+        let mut pressed = self.pressed_keys.clone();
+        for (&position, (action, expires_at)) in &self.touch_press_feedback {
+            if *expires_at <= now || pressed.contains(&position) {
+                continue;
+            }
+            let same_key = self
+                .layout
+                .rows
+                .get(position.0)
+                .and_then(|row| row.keys.get(position.1))
+                .is_some_and(|key| Self::same_touch_feedback_key(action, &key.action));
+            if same_key {
+                pressed.push(position);
+            }
+        }
+        pressed
+    }
+
+    /// Keep quick touch taps visible even if down and up arrive before a frame.
+    pub fn update_touch_press_feedback(&mut self, qh: &QueueHandle<Self>) {
+        if self.touch_press_feedback.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        self.touch_press_feedback
+            .retain(|_, (_, expires_at)| *expires_at > now);
+        self.redraw(qh);
     }
 
     pub fn update_swipe_trail(&mut self, qh: &QueueHandle<Self>) {
@@ -3630,6 +3675,13 @@ impl TouchHandler for WaylandState {
             // instead of pasting.
             if self.clipboard_mode && matches!(key.action, KeyAction::ClipboardItem(_)) {
                 self.active_touches.insert(_id, (r_idx, k_idx));
+                self.touch_press_feedback.insert(
+                    (r_idx, k_idx),
+                    (
+                        key.action.clone(),
+                        Instant::now() + TOUCH_PRESS_FEEDBACK_DURATION,
+                    ),
+                );
                 if !self.pressed_keys.contains(&(r_idx, k_idx)) {
                     self.pressed_keys.push((r_idx, k_idx));
                 }
@@ -3643,6 +3695,13 @@ impl TouchHandler for WaylandState {
                 self.is_space_swiping = false;
             }
             self.active_touches.insert(_id, (r_idx, k_idx));
+            self.touch_press_feedback.insert(
+                (r_idx, k_idx),
+                (
+                    key.action.clone(),
+                    Instant::now() + TOUCH_PRESS_FEEDBACK_DURATION,
+                ),
+            );
             if matches!(key.action, KeyAction::Text(_)) {
                 self.last_shift_press = None;
                 self.pending_taps.insert(_id, (r_idx, k_idx));
@@ -3664,6 +3723,11 @@ impl TouchHandler for WaylandState {
                     self.begin_swipe_trace(_id, r_idx, k_idx, x, y);
                 }
             } else {
+                self.pressed_key = Some((r_idx, k_idx));
+                if !self.pressed_keys.contains(&(r_idx, k_idx)) {
+                    self.pressed_keys.push((r_idx, k_idx));
+                }
+                self.redraw(qh);
                 self.handle_key_press(r_idx, k_idx, qh, _id);
             }
         } else {
@@ -3887,6 +3951,7 @@ impl TouchHandler for WaylandState {
         self.release_all_held_mods();
         self.pressed_key = None;
         self.pressed_keys.clear();
+        self.touch_press_feedback.clear();
         self.active_touches.clear();
         self.pending_taps.clear();
         self.pending_tap_details.clear();

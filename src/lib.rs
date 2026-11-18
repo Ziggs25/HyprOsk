@@ -232,6 +232,7 @@ pub fn run_daemon(config_path: Option<&Path>) -> Result<()> {
 
         // Update hold-preview for long-press secondary visualization (Gboard/HeliBoard style)
         state.update_hold_preview(&qh);
+        state.update_touch_press_feedback(&qh);
         // Handle key repeat (e.g. hold backspace to continuously delete)
         state.update_key_repeat(&qh);
         #[cfg(feature = "futo-swipe")]
