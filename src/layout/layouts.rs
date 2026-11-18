@@ -193,13 +193,18 @@ impl KeyboardLayout {
         let action_weight = 0.35;
         top_keys.push(Key::new("◀ Back", KeyAction::Clipboard).with_weight(action_weight).special().clipboard());
 
-        let s0 = suggestions.first().map(|s| s.as_str()).unwrap_or("Clipboard History");
-        let s1 = suggestions.get(1).map(|s| s.as_str()).unwrap_or("");
-        let s2 = suggestions.get(2).map(|s| s.as_str()).unwrap_or("");
+        if suggestions.is_empty() {
+            // Give the title the full region between the back and hide buttons.
+            top_keys.push(Key::suggestion(0, "Clipboard History").with_weight(3.3));
+        } else {
+            let s0 = suggestions.first().map(String::as_str).unwrap_or("");
+            let s1 = suggestions.get(1).map(String::as_str).unwrap_or("");
+            let s2 = suggestions.get(2).map(String::as_str).unwrap_or("");
 
-        top_keys.push(Key::suggestion(0, s0).with_weight(1.0));
-        top_keys.push(Key::suggestion(1, s1).with_weight(1.3));
-        top_keys.push(Key::suggestion(2, s2).with_weight(1.0));
+            top_keys.push(Key::suggestion(0, s0).with_weight(1.0));
+            top_keys.push(Key::suggestion(1, s1).with_weight(1.3));
+            top_keys.push(Key::suggestion(2, s2).with_weight(1.0));
+        }
 
         top_keys.push(Key::new("", KeyAction::Hide).with_weight(action_weight).special());
 
