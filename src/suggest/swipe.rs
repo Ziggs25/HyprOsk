@@ -56,6 +56,7 @@ pub struct SwipeRecognizer {
     letters: Vec<char>,
     geometry: Vec<SwipeKeyGeom>,
     words_loaded: bool,
+    words_revision: Option<u64>,
 }
 
 impl SwipeRecognizer {
@@ -69,6 +70,7 @@ impl SwipeRecognizer {
             letters: Vec::new(),
             geometry: Vec::new(),
             words_loaded: false,
+            words_revision: None,
         })
     }
 
@@ -126,7 +128,12 @@ impl SwipeRecognizer {
     /// Converts dictionary frequencies to OpenSwipe's 0..255 scale. A log
     /// curve keeps low-frequency words distinguishable even though HyprOsk's
     /// stored `u16` frequencies have a much wider range.
-    pub fn load_words(&mut self, words: &[(String, u32)]) -> bool {
+    /// True when the installed OpenSwipe lexicon is stale or missing.
+    pub fn needs_dictionary_refresh(&self, revision: u64) -> bool {
+        !self.words_loaded || self.words_revision != Some(revision)
+    }
+
+    pub fn load_words(&mut self, words: &[(String, u32)], revision: u64) -> bool {
         let max_freq = words.iter().map(|(_, freq)| *freq).max().unwrap_or(0);
         let denominator = (max_freq as f64).ln_1p();
 
@@ -156,6 +163,9 @@ impl SwipeRecognizer {
             )
         };
         self.words_loaded = count > 0 && unsafe { hyprosk_swipe_engine_ready(self.handle) } != 0;
+        if self.words_loaded {
+            self.words_revision = Some(revision);
+        }
         self.words_loaded
     }
 
@@ -271,7 +281,7 @@ mod tests {
             ("hello".to_string(), 200),
             ("world".to_string(), 190),
             ("the".to_string(), 255),
-        ]));
+        ], 0));
         assert!(!recognizer.prepare_layout(&keys), "words load only once");
 
         let trace = trace_for("world", &keys);
@@ -288,7 +298,7 @@ mod tests {
             ("hello".to_string(), 200),
             ("world".to_string(), 190),
             ("the".to_string(), 255),
-        ]));
+        ], 0));
 
         let mirrored: Vec<SwipeKeyGeom> = keys
             .iter()
@@ -320,11 +330,37 @@ mod tests {
     }
 
     #[test]
+    fn learned_words_enter_the_fallback_lexicon_and_can_be_swiped() {
+        let keys = keyboard();
+        let mut dictionary = crate::suggest::dictionary::Dictionary::new_empty();
+        dictionary.record_user_word("gyatt", true);
+        dictionary.record_user_word("bruh", true);
+        let learned: Vec<_> = dictionary
+            .swipe_words()
+            .into_iter()
+            .filter(|(word, _)| word == "gyatt" || word == "bruh")
+            .collect();
+        assert_eq!(learned.len(), 2);
+
+        let revision = dictionary.swipe_lexicon_revision();
+        let mut recognizer = SwipeRecognizer::new().expect("engine");
+        assert!(recognizer.prepare_layout(&keys));
+        assert!(recognizer.load_words(&learned, revision));
+        assert!(!recognizer.needs_dictionary_refresh(revision));
+        assert!(recognizer.needs_dictionary_refresh(revision.wrapping_add(1)));
+
+        for word in ["gyatt", "bruh"] {
+            let candidates = recognizer.decode(&trace_for(word, &keys), 0.3, 5);
+            assert!(candidates.iter().any(|candidate| candidate == word), "{word}: {candidates:?}");
+        }
+    }
+
+    #[test]
     fn empty_trace_produces_no_candidates() {
         let keys = keyboard();
         let mut recognizer = SwipeRecognizer::new().expect("engine");
         assert!(recognizer.prepare_layout(&keys));
-        assert!(recognizer.load_words(&[("word".to_string(), 10)]));
+        assert!(recognizer.load_words(&[("word".to_string(), 10)], 0));
         assert!(recognizer.decode(&[], 0.3, 3).is_empty());
     }
 }

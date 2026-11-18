@@ -254,9 +254,10 @@ impl SwipeRecognizer {
 
             let mut ranked: Vec<_> = next.into_iter().collect();
             ranked.sort_unstable_by(|(left_word, left), (right_word, right)| {
-                right
-                    .total()
-                    .total_cmp(&left.total())
+                let left_score = left.total() + self.learned_prefix_bias(dictionary, left_word);
+                let right_score = right.total() + self.learned_prefix_bias(dictionary, right_word);
+                right_score
+                    .total_cmp(&left_score)
                     .then_with(|| left_word.cmp(right_word))
             });
             ranked.truncate(BEAM_WIDTH);
@@ -271,7 +272,8 @@ impl SwipeRecognizer {
             .filter_map(|(word, score)| {
                 let frequency = self.word_frequency(dictionary, &word)?;
                 let prior = FREQUENCY_BONUS * (frequency.max(1) as f32).ln();
-                Some((word, score.total() + prior))
+                let personal_bias = self.learned_word_bias(dictionary, &word);
+                Some((word, score.total() + prior + personal_bias))
             })
             .collect();
         candidates.sort_unstable_by(|(left_word, left), (right_word, right)| {
@@ -295,6 +297,46 @@ impl SwipeRecognizer {
             .is_some_and(|entry| word_for(dictionary, *entry).starts_with(prefix))
     }
 
+    fn learned_word_bias(&self, dictionary: &Dictionary, word: &str) -> f32 {
+        let mut index = self
+            .lexicon
+            .partition_point(|entry| word_for(dictionary, *entry) < word);
+        let mut best = 0.0_f32;
+        while let Some(entry) = self.lexicon.get(index).copied() {
+            if word_for(dictionary, entry) != word {
+                break;
+            }
+            if let WordRef::User(user_index) = entry
+                && let Some(user) = dictionary.user_dict.words.get(user_index)
+            {
+                best = best.max(user.swipe_bias());
+            }
+            index += 1;
+        }
+        best
+    }
+
+    fn learned_prefix_bias(&self, dictionary: &Dictionary, prefix: &str) -> f32 {
+        let mut index = self
+            .lexicon
+            .partition_point(|entry| word_for(dictionary, *entry) < prefix);
+        let mut best = 0.0_f32;
+        while let Some(entry) = self.lexicon.get(index).copied() {
+            let word = word_for(dictionary, entry);
+            if !word.starts_with(prefix) {
+                break;
+            }
+            if let WordRef::User(user_index) = entry
+                && let Some(user) = dictionary.user_dict.words.get(user_index)
+            {
+                let progress = prefix.len() as f32 / word.len().max(1) as f32;
+                best = best.max(user.swipe_bias() * progress);
+            }
+            index += 1;
+        }
+        best
+    }
+
     fn word_frequency(&self, dictionary: &Dictionary, word: &str) -> Option<u32> {
         let mut index = self
             .lexicon
@@ -310,8 +352,7 @@ impl SwipeRecognizer {
                     .swipe_base_word(base_index)
                     .map(|(_, frequency)| frequency)?,
                 WordRef::User(user_index) => {
-                    let user = dictionary.user_dict.words.get(user_index)?;
-                    u32::from(user.freq) * 32 + if user.is_permanent != 0 { 1_500 } else { 0 }
+                    dictionary.swipe_user_word_frequency(user_index)?
                 }
             };
             best = Some(best.unwrap_or(0).max(frequency));
@@ -448,11 +489,29 @@ mod tests {
     fn lexicon_index_includes_user_learned_words_without_copying_them() {
         let mut dictionary = Dictionary::new_empty();
         dictionary.record_user_word("gyatt", true);
+        dictionary.record_user_word("bruh", true);
         let mut recognizer = SwipeRecognizer::new().expect("FUTO model asset");
         recognizer.refresh_lexicon(&dictionary);
         assert!(recognizer.has_prefix(&dictionary, "gya"));
         assert!(recognizer.word_frequency(&dictionary, "gyatt").is_some());
+        assert!(recognizer.has_prefix(&dictionary, "bru"));
+        assert!(recognizer.word_frequency(&dictionary, "bruh").is_some());
         assert!(!recognizer.has_prefix(&dictionary, "gyatx"));
+    }
+
+    #[test]
+    fn learned_words_gain_a_bounded_bias_after_reinforcement() {
+        let mut dictionary = Dictionary::new_empty();
+        dictionary.record_user_word("gyatt", false);
+        let mut recognizer = SwipeRecognizer::new().expect("FUTO model asset");
+        recognizer.refresh_lexicon(&dictionary);
+        assert_eq!(recognizer.learned_word_bias(&dictionary, "gyatt"), 0.0);
+
+        dictionary.record_user_word("gyatt", false);
+        recognizer.refresh_lexicon(&dictionary);
+        let bias = recognizer.learned_word_bias(&dictionary, "gyatt");
+        assert!(bias > 1.0 && bias <= 1.5);
+        assert!(recognizer.learned_prefix_bias(&dictionary, "gya") > 0.0);
     }
 
     #[test]

@@ -1971,12 +1971,31 @@ impl WaylandState {
         }
     }
 
+    fn record_suggestion_word(&mut self, word: &str, explicit_selection: bool) {
+        if explicit_selection {
+            self.suggest_engine.on_word_selected(word);
+        } else {
+            self.suggest_engine.on_swipe_word_committed(word);
+        }
+    }
+
     pub fn handle_key_press(
         &mut self,
         r_idx: usize,
         k_idx: usize,
         qh: &QueueHandle<Self>,
         touch_id: i32,
+    ) {
+        self.handle_key_press_with_learning(r_idx, k_idx, qh, touch_id, true);
+    }
+
+    fn handle_key_press_with_learning(
+        &mut self,
+        r_idx: usize,
+        k_idx: usize,
+        qh: &QueueHandle<Self>,
+        touch_id: i32,
+        explicit_selection: bool,
     ) {
         let action = {
             let row = match self.layout.rows.get(r_idx) {
@@ -2037,7 +2056,7 @@ impl WaylandState {
                     let is_next_word = self.suggest_engine.is_next_word_mode;
                                         tracing::debug!(candidate_index = idx, is_next_word, "suggestion selected");
                     if is_next_word {
-                        self.suggest_engine.on_word_selected(&chosen_word);
+                        self.record_suggestion_word(&chosen_word, explicit_selection);
                         self.send_text(&format!("{} ", chosen_word));
                     } else {
                         let (delete_count, replace_range) = calculate_replacement_target(
@@ -2111,7 +2130,7 @@ impl WaylandState {
                                 self.im_state.cursor_pos = new_cursor;
                                 self.im_state.anchor_pos = new_cursor;
                             }
-                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.record_suggestion_word(&chosen_word, explicit_selection);
                             self.sync_layout_and_redraw(qh);
                             return;
                         }
@@ -2159,7 +2178,7 @@ impl WaylandState {
                                     self.im_state.anchor_pos = new_cursor;
                                 }
                             }
-                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.record_suggestion_word(&chosen_word, explicit_selection);
                             self.sync_layout_and_redraw(qh);
                             return;
                         }
@@ -2193,7 +2212,7 @@ impl WaylandState {
                                 self.im_state.cursor_pos = new_cursor;
                                 self.im_state.anchor_pos = new_cursor;
                             }
-                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.record_suggestion_word(&chosen_word, explicit_selection);
                             self.sync_layout_and_redraw(qh);
                             return;
                         }
@@ -2203,7 +2222,7 @@ impl WaylandState {
                         // prefix remains outside the host's selected suffix.
                         if !has_selection && chosen_word == app_word {
                             tracing::info!("suggest same -> space");
-                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.record_suggestion_word(&chosen_word, explicit_selection);
                             self.send_text(" ");
                         } else {
                             // Unified virtual-keyboard replacement: Chromium/Ozone Wayland drops
@@ -2251,7 +2270,7 @@ impl WaylandState {
                                     }
                                 }
                             }
-                            self.suggest_engine.on_word_selected(&chosen_word);
+                            self.record_suggestion_word(&chosen_word, explicit_selection);
                         }
                     }
                 }
@@ -2936,16 +2955,20 @@ impl WaylandState {
 
         #[cfg(not(feature = "futo-swipe"))]
         {
+            let revision = self.suggest_engine.dictionary.swipe_lexicon_revision();
             let need_words = self
                 .swipe_engine
                 .as_mut()
-                .map(|engine| engine.prepare_layout(&keys))
+                .map(|engine| {
+                    let layout_changed = engine.prepare_layout(&keys);
+                    layout_changed || engine.needs_dictionary_refresh(revision)
+                })
                 .unwrap_or(false);
             if need_words {
-                let words = self.suggest_engine.dictionary.all_words(usize::MAX);
-                tracing::info!("geometric swipe engine loading {} base words", words.len());
+                let words = self.suggest_engine.dictionary.swipe_words();
+                tracing::info!("geometric swipe engine loading {} base and learned words", words.len());
                 if let Some(engine) = self.swipe_engine.as_mut()
-                    && !engine.load_words(&words)
+                    && !engine.load_words(&words, revision)
                 {
                     tracing::warn!("geometric swipe engine could not load dictionary");
                     return Vec::new();
@@ -3016,7 +3039,7 @@ impl WaylandState {
                     .map(|k_idx| (r_idx, k_idx))
             });
         if let Some((r_idx, k_idx)) = suggestion_key {
-            self.handle_key_press(r_idx, k_idx, qh, -1);
+            self.handle_key_press_with_learning(r_idx, k_idx, qh, -1, false);
             self.pressed_keys.retain(|&key| key != (r_idx, k_idx));
             self.pressed_key = self.pressed_keys.last().copied();
             self.press_instant = None;

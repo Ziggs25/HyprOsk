@@ -85,6 +85,15 @@ impl UserWordEntry {
         let valid = &self.word[..self.len as usize];
         std::str::from_utf8(valid).unwrap_or("")
     }
+
+    /// Give deliberately selected or repeatedly used words a bounded swipe bias.
+    pub fn swipe_bias(&self) -> f32 {
+        if self.is_permanent == 0 {
+            return 0.0;
+        }
+        let reinforcements = self.count.saturating_sub(1).min(5) as f32;
+        1.0 + reinforcements * 0.1
+    }
 }
 
 /// Bit-packed User History Bigram Entry (68 bytes)
@@ -507,6 +516,20 @@ mod tests {
         dict.record_word("coolslang", true); // explicitly selected
         assert_eq!(dict.words.len(), 1);
         assert_eq!(dict.words[0].is_permanent, 1);
+    }
+
+    #[test]
+    fn swipe_bias_requires_selection_or_reinforcement() {
+        let mut dict = UserDictionary::new_empty();
+        dict.record_word("gyatt", false);
+        assert_eq!(dict.words[0].swipe_bias(), 0.0);
+
+        dict.record_word("gyatt", false);
+        assert!(dict.words[0].swipe_bias() > 1.0);
+        assert!(dict.words[0].swipe_bias() <= 1.5);
+
+        dict.record_word("bruh", true);
+        assert_eq!(dict.words[1].swipe_bias(), 1.0);
     }
 
     #[test]

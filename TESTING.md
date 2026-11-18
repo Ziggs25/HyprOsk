@@ -89,6 +89,13 @@ model plus constrained decoder to rank `computer` first. Another test adds
 `gyatt` to an isolated user dictionary and verifies that its prefixes and
 terminal word are present in the swipe lexicon index.
 
+Learned-word preference is bounded: an automatic swipe commit is a transient
+use, while a tapped correction or repeated use receives a stronger preference.
+The geometric fallback reloads its merged base and user lexicon after a user
+dictionary change. FUTO's live preview worker receives the updated dictionary
+on the next gesture, and final decoding reads the current dictionary. Check
+gyatt and bruh in both build modes.
+
 Manual:
 
 1. Run `hyprosk about` and verify the app displays “Swipe typing powered by

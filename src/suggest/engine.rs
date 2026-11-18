@@ -245,6 +245,14 @@ impl SuggestEngine {
     }
 
     pub fn on_word_selected(&mut self, chosen_word: &str) {
+        self.on_word_committed(chosen_word, true);
+    }
+
+    pub fn on_swipe_word_committed(&mut self, chosen_word: &str) {
+        self.on_word_committed(chosen_word, false);
+    }
+
+    fn on_word_committed(&mut self, chosen_word: &str, explicit_selection: bool) {
         let chosen_clean = chosen_word.trim().to_string();
         self.pending_selection_echo = if chosen_clean.is_empty() {
             None
@@ -256,8 +264,9 @@ impl SuggestEngine {
                 started_at: Instant::now(),
             })
         };
-        // Explicitly chosen word is immediately marked permanent (immune to pruning)
-        self.dictionary.record_user_word(&chosen_clean, true);
+        // A swipe commit is transient; a tapped correction is immediately permanent.
+        self.dictionary
+            .record_user_word(&chosen_clean, explicit_selection);
         if let Some(prev) = self.word_history.last()
             && !prev.eq_ignore_ascii_case(&chosen_clean)
         {

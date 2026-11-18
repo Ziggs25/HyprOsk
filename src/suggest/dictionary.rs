@@ -146,6 +146,65 @@ impl Dictionary {
         words
     }
 
+    /// Base and user words available to swipe decoding, with bounded user weights.
+    pub fn swipe_words(&self) -> Vec<(String, u32)> {
+        let base_max = self
+            .unigrams
+            .iter()
+            .map(|entry| u32::from(entry.freq))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let mut words = Vec::with_capacity(self.unigrams.len() + self.user_dict.words.len());
+
+        for entry in &self.unigrams {
+            let word = self.get_word(entry);
+            if valid_swipe_word(word) {
+                words.push((word.to_string(), u32::from(entry.freq)));
+            }
+        }
+        for (index, entry) in self.user_dict.words.iter().enumerate() {
+            let word = entry.as_str();
+            if valid_swipe_word(word) {
+                words.push((word.to_string(), self.swipe_user_word_frequency_with_base(index, base_max)));
+            }
+        }
+
+        // Keep the strongest frequency when the user dictionary repeats a base word.
+        words.sort_unstable_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| right.1.cmp(&left.1))
+        });
+        words.dedup_by(|next, previous| next.0 == previous.0);
+        words
+    }
+
+    /// Scale user words against the current corpus so their preference stays bounded.
+    pub fn swipe_user_word_frequency(&self, index: usize) -> Option<u32> {
+        let base_max = self
+            .unigrams
+            .iter()
+            .map(|entry| u32::from(entry.freq))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        self.user_dict.words.get(index)?;
+        Some(self.swipe_user_word_frequency_with_base(index, base_max))
+    }
+
+    fn swipe_user_word_frequency_with_base(&self, index: usize, base_max: u32) -> u32 {
+        let Some(entry) = self.user_dict.words.get(index) else {
+            return 1;
+        };
+        if entry.is_permanent == 0 {
+            return (base_max / 8).max(1);
+        }
+
+        let reinforcements = u32::from(entry.count.saturating_sub(1).min(4));
+        base_max.saturating_mul(4 + reinforcements).max(1)
+    }
+
     /// Fast, zero-heap-allocation prefix scanning on hot path.
     /// Combines shortcut expansions, user history, and base vocabulary.
     pub fn find_completions(&self, prefix: &str, limit: usize) -> Vec<(String, u32)> {
@@ -809,9 +868,38 @@ impl Dictionary {
     }
 }
 
+fn valid_swipe_word(word: &str) -> bool {
+    !word.is_empty()
+        && word.len() <= crate::suggest::user_dict::MAX_WORD_LEN
+        && word.bytes().all(|byte| byte.is_ascii_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swipe_lexicon_includes_learned_words_with_bounded_weights() {
+        let mut dictionary = Dictionary::new_empty();
+        dictionary.record_user_word("gyatt", false);
+        dictionary.record_user_word("bruh", true);
+
+        let words = dictionary.swipe_words();
+        assert!(words.iter().any(|(word, _)| word == "gyatt"));
+        assert!(words.iter().any(|(word, _)| word == "bruh"));
+
+        let base_max = dictionary
+            .unigrams
+            .iter()
+            .map(|entry| u32::from(entry.freq))
+            .max()
+            .unwrap();
+        let gyatt_index = dictionary.user_dict.words.iter().position(|word| word.as_str() == "gyatt").unwrap();
+        let bruh_index = dictionary.user_dict.words.iter().position(|word| word.as_str() == "bruh").unwrap();
+        assert!(dictionary.swipe_user_word_frequency(gyatt_index).unwrap() <= base_max / 8);
+        assert!(dictionary.swipe_user_word_frequency(bruh_index).unwrap() <= base_max * 8);
+        assert!(words.iter().filter(|(word, _)| word == "gyatt").count() == 1);
+    }
 
     #[test]
     fn test_heliboard_binary_dictionary_loading() {
