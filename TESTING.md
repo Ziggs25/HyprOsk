@@ -42,7 +42,12 @@ instead of creating an unusable input-method object.
    address bar until Helium shows a completion, then tap `gyatt`. The result
    must be `gyatt `, without a duplicated character. Also type `i` and tap
    case-only candidate `I`; the result must preserve `I` and end in a space.
-   Repeat in an ordinary webpage field to confirm normal input behavior.
+   From an empty address bar, type `h` until Helium reports a one-character
+   completion, then tap `him`; the result must be `him ` even when the
+   completion tail is not URL-shaped. If the host already reports whitespace
+   after the token, selecting the candidate must leave exactly one space.
+   Repeat in an ordinary webpage field with the caret inside an existing word;
+   the normal mid-word replacement and spacing must remain intact.
 8. Exercise OSK ArrowUp/ArrowDown candidate clearing: type a prefix (e.g. `hel`)
    so suggestion candidates appear on the OSK bar. Tap or hold OSK `ArrowDown` or
    `ArrowUp`; candidates must immediately clear and stay cleared across key

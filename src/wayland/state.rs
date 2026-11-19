@@ -2121,10 +2121,19 @@ impl WaylandState {
                                     })
                                 })
                         {
-                            let needs_space = self.im_state.surrounding_text.as_deref()
+                            let has_space_after_token = self
+                                .im_state
+                                .surrounding_text
+                                .as_deref()
                                 .and_then(|text| text.get(end..))
-                                .is_none_or(str::is_empty);
-                            let replacement = format!("{}{}", chosen_word, if needs_space { " " } else { "" });
+                                .and_then(|tail| tail.chars().next())
+                                .is_some_and(char::is_whitespace);
+                            let needs_space = !has_space_after_token;
+                            let replacement = format!(
+                                "{}{}",
+                                chosen_word,
+                                if needs_space { " " } else { "" }
+                            );
                             tracing::info!(
                                 delete_before = backspaces,
                                 delete_after = forward_deletes,
